@@ -15,6 +15,16 @@ import { isUnitCountAvailable } from "@/lib/data-sources/unit-count";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * このページから呼ぶ建物取得（syncAreaBuildings）は、Overpass API の応答待ちと
+ * 位置参照情報の初回ダウンロードで時間がかかる。既定の実行時間では足りないため
+ * 明示的に伸ばす。
+ *
+ * 値は Vercel Hobby プランの上限に合わせている。上限を超える値を指定すると
+ * デプロイ自体が失敗するため、プランを変更したときはここも見直すこと。
+ */
+export const maxDuration = 60;
+
 export default async function BuildingsPage({
   searchParams,
 }: {

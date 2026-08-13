@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { DEFAULT_REDIRECT, safeRedirectTarget } from "@/lib/auth/redirect";
 
 export type LoginState = { error: string | null };
 
@@ -12,7 +13,7 @@ export async function signIn(
 ): Promise<LoginState> {
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
-  const next = String(formData.get("next") ?? "/buildings");
+  const next = String(formData.get("next") ?? DEFAULT_REDIRECT);
 
   if (!email || !password) {
     return { error: "メールアドレスとパスワードを入力してください。" };
@@ -31,7 +32,7 @@ export async function signIn(
   }
 
   revalidatePath("/", "layout");
-  redirect(next.startsWith("/") ? next : "/buildings");
+  redirect(safeRedirectTarget(next));
 }
 
 export async function signOut() {
