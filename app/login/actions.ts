@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { DEFAULT_REDIRECT, safeRedirectTarget } from "@/lib/auth/redirect";
+import { describeSignInError } from "./errors";
 
 export type LoginState = { error: string | null };
 
@@ -23,12 +24,7 @@ export async function signIn(
   const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
-    return {
-      error:
-        error.message === "Invalid login credentials"
-          ? "メールアドレスまたはパスワードが違います。"
-          : `ログインに失敗しました: ${error.message}`,
-    };
+    return { error: describeSignInError(error.message) };
   }
 
   revalidatePath("/", "layout");
