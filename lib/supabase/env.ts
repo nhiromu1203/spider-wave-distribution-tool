@@ -79,8 +79,11 @@ export type SupabaseEnvDiagnosis = {
  * 値そのものは返さない診断用（画面やログに出しても安全な内容だけ）。
  */
 export function diagnoseSupabaseEnv(): SupabaseEnvDiagnosis {
-  const url = sanitizeEnvValue(process.env[URL_VAR], URL_VAR);
-  const anonKey = sanitizeEnvValue(process.env[KEY_VAR], KEY_VAR);
+  // NEXT_PUBLIC_ の値は、ビルド時にこの「静的な参照」だけが実際の値へ置き換わる。
+  // process.env[URL_VAR] のように変数で参照するとブラウザ側で undefined になるため、
+  // 必ずこの形のまま書くこと。
+  const url = sanitizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_URL, URL_VAR);
+  const anonKey = sanitizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, KEY_VAR);
   const problems: string[] = [];
 
   if (!url) {

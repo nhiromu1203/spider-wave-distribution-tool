@@ -33,6 +33,25 @@ afterEach(() => {
   for (const [k, v] of Object.entries(saved)) setEnv(k, v);
 });
 
+describe("NEXT_PUBLIC_ の静的参照", () => {
+  it("process.env を変数で引かない（ブラウザで undefined になるため）", async () => {
+    // Next.js は process.env.NEXT_PUBLIC_XXX という「そのままの形」だけを
+    // ビルド時に値へ置き換える。process.env[VAR] と書くと置換されず、
+    // ブラウザ側では undefined になって接続できなくなる。
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../env.ts", import.meta.url), "utf8");
+
+    // 注意書きのコメント自体に反応しないよう、コードだけを見る
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+
+    expect(code).toContain("process.env.NEXT_PUBLIC_SUPABASE_URL");
+    expect(code).toContain("process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY");
+    expect(code).not.toMatch(/process\.env\[/);
+  });
+});
+
 describe("貼り付け時に紛れ込むものを取り除く", () => {
   it("前後の空白と改行を落とす", () => {
     expect(sanitizeEnvValue(`  ${VALID_KEY}\n`, KEY_VAR)).toBe(VALID_KEY);
