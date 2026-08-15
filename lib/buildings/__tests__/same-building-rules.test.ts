@@ -127,3 +127,40 @@ describe("不具合の再現と修正の確認", () => {
     ).toBe(true);
   });
 });
+
+describe("過去配布リスト取込は建物を増やさない", () => {
+  /**
+   * 実際に起きたこと。
+   * 過去配布リストを取り込んだところ、住所が一致する建物が無い行まで
+   * 登録され、建物名も戸数も分からない行が建物マスタに大量に増えた。
+   *
+   * 過去配布リストは「どこへ配ったか」の記録であって建物マスタではない。
+   * 既存の建物に配布実績を付けるだけにする。
+   */
+  it("skipUnmatched を渡す呼び出しになっている", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(
+      new URL("../../import/actions.ts", import.meta.url),
+      "utf8",
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+    expect(code).toContain("skipUnmatched: true");
+  });
+
+  it("新規作成の直前に必ず歯止めが入っている", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(
+      new URL("../ingest.ts", import.meta.url),
+      "utf8",
+    );
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+    // insertBuilding を呼ぶ箇所の数だけ、skipUnmatched の判定があること
+    const inserts = [...code.matchAll(/await insertBuilding\(/g)].length;
+    const guards = [...code.matchAll(/if \(options\.skipUnmatched\)/g)].length;
+
+    expect(inserts).toBeGreaterThan(0);
+    expect(guards).toBe(inserts);
+  });
+});

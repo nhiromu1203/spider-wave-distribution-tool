@@ -642,7 +642,18 @@ function emptyCounts(): Record<IngestOutcome, number> {
 export async function ingestBuildings(
   supabase: Client,
   inputs: BuildingInput[],
-  options: { source: BuildingSource; userId?: string | null },
+  options: {
+    source: BuildingSource;
+    userId?: string | null;
+    /**
+     * 既存の建物にだけ反映し、新しい建物を作らない。
+     *
+     * 過去配布リストは「どこへ配ったか」の記録であって、建物マスタでは
+     * ない。住所が一致する建物が無い行まで登録すると、建物名も戸数も
+     * 分からない行が건物マスタに増えていく（実際に増えた）。
+     */
+    skipUnmatched?: boolean;
+  },
 ): Promise<IngestSummary> {
   const results: IngestRowResult[] = [];
   const counts = emptyCounts();
@@ -717,6 +728,19 @@ export async function ingestBuildings(
         null;
 
       if (!target) {
+        // 新規作成をしない取込では、既存に当たらなかった行はここで終える
+        if (options.skipUnmatched) {
+          results.push({
+            input,
+            outcome: "skipped",
+            buildingId: null,
+            message:
+              "住所が一致する建物が見つかりませんでした（新しい建物は作成しません）。",
+          });
+          counts.skipped++;
+          continue;
+        }
+
         const inserted = await insertBuilding(supabase, row, options.source);
         if (!inserted.ok) {
           results.push({
@@ -810,6 +834,19 @@ export async function ingestBuildings(
         message: mergeMessage,
       });
       counts.merged++;
+      continue;
+    }
+
+    // 新規作成をしない取込では、既存に当たらなかった行はここで終える
+    if (options.skipUnmatched) {
+      results.push({
+        input,
+        outcome: "skipped",
+        buildingId: null,
+        message:
+          "住所が一致する建物が見つかりませんでした（新しい建物は作成しません）。",
+      });
+      counts.skipped++;
       continue;
     }
 

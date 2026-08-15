@@ -114,6 +114,9 @@ export async function runImport(
   try {
     const summary = await ingestBuildings(supabase, inputs, {
       source: "import",
+      // 過去配布リストは配布実績の記録であり、建物マスタではない。
+      // 住所が一致する建物が無い行で新しい建物を作らない。
+      skipUnmatched: true,
       userId: user.id,
     });
 
