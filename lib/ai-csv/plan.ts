@@ -13,6 +13,7 @@
 
 import { parseCsv } from "@/lib/building-names/csv";
 import { blockKeyOf, parseBlockKey } from "@/lib/building-names/block-key";
+import { normalizeBuildingName } from "@/lib/building-matching";
 
 export const AI_CSV_COLUMNS = [
   "building_id",
@@ -130,6 +131,7 @@ export type FieldChange = {
 
 export type RowVerdict =
   | "更新可能"
+  | "新規登録"
   | "建物名競合"
   | "住所競合"
   | "要確認"
@@ -152,8 +154,13 @@ export type ImportPlan = {
   errors: CsvError[];
   counts: {
     total: number;
+    /** 既存建物を更新できる件数 */
     updatable: number;
+    /** DB に無く、新しく登録する件数 */
+    creatable: number;
+    /** 人の確認が必要な件数（競合・同一住所に複数棟など） */
     needsReview: number;
+    /** 建物を特定できず、新規登録もできない件数 */
     unmatched: number;
     noChange: number;
     error: number;
@@ -366,7 +373,73 @@ export type PlanOptions = {
    * 住所は対象にしない（詳細になった場合のみ更新する規則は変えない）。
    */
   overwriteExisting?: boolean;
+  /** DB に無い建物を新規登録の候補にする */
+  allowCreate?: boolean;
 };
+
+/** 総戸数がこれ未満と分かっている建物は配布対象にしない */
+export const MIN_TOTAL_UNITS = 6;
+
+/**
+ * 新規登録する建物の内容を組み立てる。
+ * 必要な情報が足りない場合や、配布対象にならない建物は null を返す。
+ */
+export function planNewBuilding(csv: AiCsvRow): FieldChange[] | null {
+  const name = csv.building_name.trim();
+  const address = csv.address.trim();
+  if (!name || name === UNKNOWN_NAME || !address) return null;
+  // 街区まで読めない住所は配布先を特定できない
+  if (!blockKeyOf(address)) return null;
+
+  const changes: FieldChange[] = [
+    { field: "building_name", oldValue: null, newValue: name },
+    { field: "address", oldValue: null, newValue: address },
+  ];
+
+  const units = parseTotalUnits(csv.total_units);
+  if (units.ok) {
+    // 戸数が分かっていて 6 戸未満なら配布対象にしない。
+    // 分からない場合は登録する（推測で除外しない）。
+    if (units.value < MIN_TOTAL_UNITS) return null;
+    changes.push({
+      field: "total_units",
+      oldValue: null,
+      newValue: String(units.value),
+    });
+  }
+
+  const propertyType = parsePropertyType(csv.property_type);
+  if (propertyType.ok) {
+    changes.push({
+      field: "property_type",
+      oldValue: null,
+      newValue: propertyType.value,
+    });
+  }
+
+  const buildingType = csv.building_type.trim();
+  if (buildingType) {
+    changes.push({ field: "building_type", oldValue: null, newValue: buildingType });
+  }
+
+  return changes;
+}
+
+/** 建物名で候補を絞る。正規化して比べる */
+function narrowByName(
+  candidates: CurrentBuilding[],
+  csvName: string,
+): CurrentBuilding[] {
+  const name = csvName.trim();
+  if (!name || name === UNKNOWN_NAME) return [];
+
+  const target = normalizeBuildingName(name);
+  if (!target) return [];
+
+  return candidates.filter(
+    (b) => normalizeBuildingName(b.building_name ?? "") === target,
+  );
+}
 
 export function planAiCsvImport(
   rows: AiCsvRow[],
@@ -374,6 +447,7 @@ export function planAiCsvImport(
   options: PlanOptions = {},
 ): ImportPlan {
   const overwrite = options.overwriteExisting === true;
+  const allowCreate = options.allowCreate === true;
   const byId = new Map(current.map((b) => [b.id, b]));
 
   // building_id が無い CSV 用。住所で引けるようにしておく
@@ -396,25 +470,44 @@ export function planAiCsvImport(
   for (const csv of rows) {
     const reasons: string[] = [];
     let matched: CurrentBuilding | null = null;
+    /** 住所では建物を絞りきれず、人の確認が必要 */
+    let needsMatchReview = false;
+    /** DB に無い建物 */
+    let isNew = false;
 
     // ── 突き合わせ ────────────────────────────────────────
     if (csv.building_id) {
       matched = byId.get(csv.building_id) ?? null;
       if (!matched) reasons.push(`building_id が見つかりません（${csv.building_id}）。`);
     } else if (csv.address) {
-      const exact = byAddress.get(canonicalAddress(csv.address)) ?? [];
+      const csvCanonical = canonicalAddress(csv.address);
+      const exact = byAddress.get(csvCanonical) ?? [];
 
       if (exact.length === 1) {
+        // ① 正規化住所で完全一致し、1 件だけ
         matched = exact[0];
-        reasons.push("building_id が無いため住所で照合しました。");
+        reasons.push("住所の完全一致で照合しました。");
       } else if (exact.length > 1) {
-        reasons.push(`同じ住所に ${exact.length} 件あり、1 件に絞れません。`);
+        // ② 同じ住所に複数ある場合は建物名で絞る
+        const sameName = narrowByName(exact, csv.building_name);
+        if (sameName.length === 1) {
+          matched = sameName[0];
+          reasons.push("住所と建物名の一致で照合しました。");
+        } else {
+          // ④ 建物名でも絞れないものは人に確認してもらう
+          needsMatchReview = true;
+          reasons.push(
+            `同じ住所に ${exact.length} 件あり、建物名でも 1 件に絞れません。`,
+          );
+        }
       } else {
-        // 号まで一致しない場合、街区で引き直す。
-        // 街区に 1 件しかないときだけ採用する。複数あると
-        // どの棟か決められないため。
+        // ③ 号まで一致しない場合、こちらの住所が「より粗い」ものだけを候補にする。
+        //    CSV が 3-12-5 で DB が 3-12 なら同じ建物の可能性が高い。
+        //    DB が 3-12-9 のように別の号なら、それは別の建物。
         const block = blockKeyOf(csv.address);
-        const inBlock = block ? (byBlock.get(block) ?? []) : [];
+        const inBlock = (block ? (byBlock.get(block) ?? []) : []).filter((b) =>
+          csvCanonical.startsWith(canonicalAddress(b.address)),
+        );
 
         if (inBlock.length === 1) {
           matched = inBlock[0];
@@ -422,11 +515,20 @@ export function planAiCsvImport(
             `号まで一致する建物が無いため、街区（${block}）で照合しました。`,
           );
         } else if (inBlock.length > 1) {
-          reasons.push(
-            `街区（${block}）に ${inBlock.length} 件あり、どの棟か決められません。`,
-          );
+          const sameName = narrowByName(inBlock, csv.building_name);
+          if (sameName.length === 1) {
+            matched = sameName[0];
+            reasons.push(`街区（${block}）内で建物名の一致により照合しました。`);
+          } else {
+            needsMatchReview = true;
+            reasons.push(
+              `街区（${block}）に ${inBlock.length} 件あり、どの棟か決められません。`,
+            );
+          }
         } else {
-          reasons.push("住所に一致する建物がありません。");
+          // DB に無い建物。新しく登録する候補にする
+          isNew = true;
+          reasons.push("DB に該当する建物がないため、新規登録の候補です。");
         }
       }
     } else {
@@ -434,12 +536,22 @@ export function planAiCsvImport(
     }
 
     if (!matched) {
+      const newBuilding = isNew && allowCreate ? planNewBuilding(csv) : null;
+
+      if (isNew && allowCreate && !newBuilding) {
+        reasons.push("新規登録に必要な情報が足りません。");
+      }
+
       planned.push({
         line: csv.line,
-        building_id: csv.building_id || null,
+        building_id: null,
         matched: null,
-        verdict: "照合不可",
-        changes: [],
+        verdict: newBuilding
+          ? "新規登録"
+          : needsMatchReview
+            ? "要確認"
+            : "照合不可",
+        changes: newBuilding ?? [],
         reasons,
         csv,
       });
@@ -564,6 +676,7 @@ export function planAiCsvImport(
   const counts = {
     total: planned.length,
     updatable: planned.filter((r) => r.verdict === "更新可能").length,
+    creatable: planned.filter((r) => r.verdict === "新規登録").length,
     needsReview: planned.filter((r) =>
       ["建物名競合", "住所競合", "要確認"].includes(r.verdict),
     ).length,

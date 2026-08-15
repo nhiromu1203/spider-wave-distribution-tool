@@ -225,13 +225,13 @@ describe("行ごとの判定", () => {
     expect(plan.rows[0].building_id).toBe("b1");
   });
 
-  it("同じ住所に複数棟あるときは自動確定しない", () => {
+  it("同じ住所に複数棟あるときは自動確定せず、人の確認に回す", () => {
     const plan = planOf(row({ building_id: "", address: "東京都荒川区東日暮里3丁目12" }), [
       building({ id: "b1" }),
       building({ id: "b2" }),
     ]);
 
-    expect(plan.rows[0].verdict).toBe("照合不可");
+    expect(plan.rows[0].verdict).toBe("要確認");
     expect(plan.rows[0].changes).toHaveLength(0);
   });
 
@@ -379,13 +379,14 @@ describe("号まで一致しない住所の照合", () => {
     expect(plan.rows[0].changes.map((c) => c.field)).toContain("total_units");
   });
 
-  it("街区に複数あるときは照合しない（取り違えを防ぐ）", () => {
+  it("街区に複数あるときは自動確定せず、人の確認に回す", () => {
     const plan = planOf(
       row({ building_id: "", address: "東京都荒川区東日暮里3丁目12番5号" }),
       [building({ id: "b1" }), building({ id: "b2" })],
     );
 
-    expect(plan.rows[0].verdict).toBe("照合不可");
+    expect(plan.rows[0].verdict).toBe("要確認");
+    expect(plan.rows[0].changes).toHaveLength(0);
     expect(plan.rows[0].reasons.join()).toContain("決められません");
   });
 
@@ -460,5 +461,138 @@ describe("建物種別", () => {
     ]);
 
     expect(plan.rows[0].verdict).toBe("変更なし");
+  });
+});
+
+describe("住所だけで照合する（building_id は必須にしない）", () => {
+  function planNoId(over: Record<string, string>, db: CurrentBuilding[], create = true) {
+    const { rows } = parseAiCsv(csv(row({ building_id: "", ...over })));
+    return planAiCsvImport(rows, db, { allowCreate: create });
+  }
+
+  it("① 正規化住所が完全一致して1件なら更新できる", () => {
+    const plan = planNoId(
+      { building_name: "○○マンション", address: "東京都荒川区東日暮里3-12" },
+      [building()],
+    );
+
+    expect(plan.rows[0].verdict).toBe("更新可能");
+    expect(plan.rows[0].matched?.id).toBe("b1");
+  });
+
+  it("② 同一住所に複数あっても建物名が一致すれば絞れる", () => {
+    const plan = planNoId(
+      { building_name: "コーポ東尾久", address: "東京都荒川区東日暮里3丁目12", total_units: "20" },
+      [
+        building({ id: "b1", building_name: "コーポ東尾久" }),
+        building({ id: "b2", building_name: "メゾン丸十" }),
+      ],
+    );
+
+    expect(plan.rows[0].verdict).toBe("更新可能");
+    expect(plan.rows[0].matched?.id).toBe("b1");
+    expect(plan.rows[0].reasons.join()).toContain("建物名の一致");
+  });
+
+  it("④ 同一住所に複数あり建物名でも絞れないなら要確認", () => {
+    const plan = planNoId(
+      { building_name: "別の名前", address: "東京都荒川区東日暮里3丁目12" },
+      [building({ id: "b1" }), building({ id: "b2" })],
+    );
+
+    expect(plan.rows[0].verdict).toBe("要確認");
+    expect(plan.rows[0].changes).toHaveLength(0);
+  });
+
+  it("DB に無ければ新規登録の候補になる", () => {
+    const plan = planNoId(
+      {
+        building_name: "新築マンション",
+        address: "東京都荒川区南千住5丁目10番3号",
+        total_units: "24",
+        property_type: "賃貸",
+        building_type: "マンション",
+      },
+      [building()],
+    );
+
+    expect(plan.rows[0].verdict).toBe("新規登録");
+    expect(plan.rows[0].matched).toBeNull();
+    expect(plan.rows[0].changes.map((c) => c.field).sort()).toEqual([
+      "address",
+      "building_name",
+      "building_type",
+      "property_type",
+      "total_units",
+    ]);
+  });
+
+  it("新規登録を許可しなければ照合不可のまま", () => {
+    const plan = planNoId(
+      { building_name: "新築マンション", address: "東京都荒川区南千住5丁目10番3号" },
+      [building()],
+      false,
+    );
+
+    expect(plan.rows[0].verdict).toBe("照合不可");
+  });
+
+  it("別の号の建物には寄せない（3-12-9 の DB に 3-12-5 の CSV）", () => {
+    const plan = planNoId(
+      { building_name: "新しい建物", address: "東京都荒川区東日暮里3丁目12番5号" },
+      [building({ address: "東京都荒川区東日暮里3丁目12番9号" })],
+    );
+
+    // 同じ街区でも号が違えば別の建物。既存へは寄せず新規登録にする
+    expect(plan.rows[0].verdict).toBe("新規登録");
+  });
+});
+
+describe("新規登録の条件", () => {
+  function newPlan(over: Record<string, string>) {
+    const { rows } = parseAiCsv(csv(row({ building_id: "", ...over })));
+    return planAiCsvImport(rows, [], { allowCreate: true }).rows[0];
+  }
+
+  it("戸数が分かっていて6戸未満なら登録しない", () => {
+    expect(
+      newPlan({
+        building_name: "小さな建物",
+        address: "東京都荒川区南千住5丁目10番3号",
+        total_units: "4",
+      }).verdict,
+    ).toBe("照合不可");
+  });
+
+  it("6戸以上なら登録する", () => {
+    expect(
+      newPlan({
+        building_name: "大きな建物",
+        address: "東京都荒川区南千住5丁目10番3号",
+        total_units: "6",
+      }).verdict,
+    ).toBe("新規登録");
+  });
+
+  it("戸数不明なら登録する（推測で除外しない）", () => {
+    expect(
+      newPlan({
+        building_name: "戸数不明の建物",
+        address: "東京都荒川区南千住5丁目10番3号",
+      }).verdict,
+    ).toBe("新規登録");
+  });
+
+  it("建物名が無ければ登録しない", () => {
+    expect(
+      newPlan({ address: "東京都荒川区南千住5丁目10番3号" }).verdict,
+    ).toBe("照合不可");
+  });
+
+  it("番まで読めない住所は登録しない", () => {
+    expect(
+      newPlan({ building_name: "住所が粗い建物", address: "東京都荒川区南千住" })
+        .verdict,
+    ).toBe("照合不可");
   });
 });

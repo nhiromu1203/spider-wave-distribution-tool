@@ -14,6 +14,7 @@ import { PROPERTY_TYPE_LABELS, type PlannedRow } from "@/lib/ai-csv/plan";
 /** 判定ごとの見た目 */
 const VERDICT_STYLE: Record<string, string> = {
   更新可能: "text-emerald-700",
+  新規登録: "text-sky-700",
   建物名競合: "text-amber-700",
   住所競合: "text-amber-700",
   要確認: "text-amber-700",
@@ -56,27 +57,37 @@ export function AiResearchCsvPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [lastBatch, setLastBatch] = useState<string | null>(null);
   const [overwrite, setOverwrite] = useState(false);
+  const [allowCreate, setAllowCreate] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const rows = preview?.plan.rows ?? [];
   const updatableLines = useMemo(
-    () => rows.filter((r) => r.verdict === "更新可能").map((r) => r.line),
+    () =>
+      rows
+        .filter((r) => r.verdict === "更新可能" || r.verdict === "新規登録")
+        .map((r) => r.line),
     [rows],
   );
 
   const read = useCallback(
-    (file: File, overwriteExisting: boolean) => {
+    (file: File, overwriteExisting: boolean, create: boolean) => {
     startTransition(async () => {
       const text = await file.text();
       setCsvText(text);
       setFileName(file.name);
-      const result = await previewAiCsv(text, { overwriteExisting });
+      const result = await previewAiCsv(text, {
+        overwriteExisting,
+        allowCreate: create,
+      });
       setPreview(result);
       setMessage(result.message);
       // 競合・要確認は既定で選ばない
+      // 更新可能と新規登録を既定で選ぶ。競合・要確認は選ばない
       setSelected(
         new Set(
-          result.plan.rows.filter((r) => r.verdict === "更新可能").map((r) => r.line),
+          result.plan.rows
+            .filter((r) => r.verdict === "更新可能" || r.verdict === "新規登録")
+            .map((r) => r.line),
         ),
       );
     });
@@ -97,6 +108,7 @@ export function AiResearchCsvPanel() {
     startTransition(async () => {
       const result = await applyAiCsv(csvText, [...selected], fileName, {
         overwriteExisting: overwrite,
+        allowCreate,
       });
       setMessage(result.message);
       setLastBatch(result.batchId);
@@ -105,7 +117,7 @@ export function AiResearchCsvPanel() {
       if (inputRef.current) inputRef.current.value = "";
       router.refresh();
     });
-  }, [csvText, selected, fileName, overwrite, router]);
+  }, [csvText, selected, fileName, overwrite, allowCreate, router]);
 
   const rollback = useCallback(() => {
     if (!lastBatch) return;
@@ -154,11 +166,34 @@ export function AiResearchCsvPanel() {
             disabled={pending}
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) read(file, overwrite);
+              if (file) read(file, overwrite, allowCreate);
             }}
           />
         </label>
       </div>
+
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={allowCreate}
+          disabled={pending}
+          onChange={(e) => {
+            setAllowCreate(e.target.checked);
+            setPreview(null);
+            setCsvText(null);
+            setSelected(new Set());
+            if (inputRef.current) inputRef.current.value = "";
+          }}
+        />
+        <span>
+          DB に無い建物を新規登録する
+          <span className="block text-xs text-[var(--text-muted)]">
+            住所で既存建物を特定できなかった行を新しく登録します。
+            総戸数が分かっていて 6 戸未満の建物は登録しません（不明なものは登録します）。
+          </span>
+        </span>
+      </label>
 
       <label className="flex items-start gap-2 text-sm">
         <input
@@ -189,7 +224,7 @@ export function AiResearchCsvPanel() {
         onDrop={(e) => {
           e.preventDefault();
           const file = e.dataTransfer.files?.[0];
-          if (file) read(file, overwrite);
+          if (file) read(file, overwrite, allowCreate);
         }}
         className="rounded-sm border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--text-muted)]"
       >
@@ -211,7 +246,8 @@ export function AiResearchCsvPanel() {
         <div className="space-y-2">
           <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             <li>CSV 総件数 <strong>{counts.total}</strong></li>
-            <li className="text-emerald-700">更新可能 <strong>{counts.updatable}</strong></li>
+            <li className="text-emerald-700">更新 <strong>{counts.updatable}</strong></li>
+            <li className="text-sky-700">新規登録 <strong>{counts.creatable}</strong></li>
             <li className="text-amber-700">要確認 {counts.needsReview}</li>
             <li className="text-red-700">照合不可 {counts.unmatched}</li>
             <li>変更なし {counts.noChange}</li>
@@ -240,7 +276,7 @@ export function AiResearchCsvPanel() {
               onClick={() => setSelected(new Set(updatableLines))}
               disabled={pending}
             >
-              「更新可能」だけ一括選択（{updatableLines.length}件）
+              更新・新規登録を一括選択（{updatableLines.length}件）
             </button>
             <button
               type="button"
@@ -281,7 +317,11 @@ export function AiResearchCsvPanel() {
                         <input
                           type="checkbox"
                           checked={selected.has(row.line)}
-                          disabled={row.verdict !== "更新可能" || pending}
+                          disabled={
+                            (row.verdict !== "更新可能" &&
+                              row.verdict !== "新規登録") ||
+                            pending
+                          }
                           onChange={() => toggle(row.line)}
                         />
                       </td>

@@ -22,8 +22,10 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import {
   normalizeAddress,
+  normalizeAddressDetailed,
   normalizeBuildingName,
 } from "@/lib/building-matching";
+import { findPrefectureByCity } from "@/lib/data-sources/areas";
 import {
   AI_CSV_COLUMNS,
   parseAiCsv,
@@ -37,6 +39,8 @@ import {
 export type ImportOptions = {
   /** 既存値も CSV で置き換える（建物名・総世帯数・所有形態・建物種別のみ） */
   overwriteExisting?: boolean;
+  /** DB に無い建物を新規登録する */
+  allowCreate?: boolean;
 };
 
 export type PreviewResult = {
@@ -63,6 +67,7 @@ export async function previewAiCsv(
     counts: {
       total: 0,
       updatable: 0,
+      creatable: 0,
       needsReview: 0,
       unmatched: 0,
       noChange: 0,
@@ -122,6 +127,7 @@ export async function previewAiCsv(
 
   const plan = planAiCsvImport(rows, current, {
     overwriteExisting: options.overwriteExisting === true,
+    allowCreate: options.allowCreate === true,
   });
   plan.errors = errors;
   plan.counts.error = errors.length;
@@ -130,8 +136,9 @@ export async function previewAiCsv(
     ok: true,
     message:
       `${plan.counts.total} 件を読み取りました。` +
-      `更新可能 ${plan.counts.updatable} 件 / 要確認 ${plan.counts.needsReview} 件 / ` +
-      `照合不可 ${plan.counts.unmatched} 件 / 変更なし ${plan.counts.noChange} 件`,
+      `更新 ${plan.counts.updatable} 件 / 新規登録 ${plan.counts.creatable} 件 / ` +
+      `要確認 ${plan.counts.needsReview} 件 / 照合不可 ${plan.counts.unmatched} 件 / ` +
+      `変更なし ${plan.counts.noChange} 件`,
     plan,
   };
 }
@@ -140,7 +147,10 @@ export type ApplyResult = {
   ok: boolean;
   message: string;
   batchId: string | null;
+  /** 既存建物を更新した件数 */
   applied: number;
+  /** 新しく登録した件数 */
+  created: number;
   failed: number;
 };
 
@@ -161,7 +171,14 @@ export async function applyAiCsv(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return { ok: false, message: "ログインが必要です。", batchId: null, applied: 0, failed: 0 };
+    return {
+      ok: false,
+      message: "ログインが必要です。",
+      batchId: null,
+      applied: 0,
+      created: 0,
+      failed: 0,
+    };
   }
 
   const preview = await previewAiCsv(text, options);
@@ -171,6 +188,7 @@ export async function applyAiCsv(
       message: `エラーがあるため反映しませんでした。${preview.message}`,
       batchId: null,
       applied: 0,
+      created: 0,
       failed: 0,
     };
   }
@@ -180,13 +198,17 @@ export async function applyAiCsv(
   const targets = preview.plan.rows.filter(
     (r) => selected.has(r.line) && r.verdict === "更新可能" && r.changes.length > 0,
   );
+  const newRows = preview.plan.rows.filter(
+    (r) => selected.has(r.line) && r.verdict === "新規登録",
+  );
 
-  if (targets.length === 0) {
+  if (targets.length === 0 && newRows.length === 0) {
     return {
       ok: true,
       message: "反映できる行がありませんでした。",
       batchId: null,
       applied: 0,
+      created: 0,
       failed: 0,
     };
   }
@@ -208,11 +230,13 @@ export async function applyAiCsv(
       message: `取込の記録に失敗しました: ${batchError?.message ?? "不明"}`,
       batchId: null,
       applied: 0,
+      created: 0,
       failed: 0,
     };
   }
 
   let applied = 0;
+  let created = 0;
   let failed = 0;
 
   for (const row of targets) {
@@ -244,9 +268,44 @@ export async function applyAiCsv(
     );
   }
 
+  // ── 新規登録 ──────────────────────────────────────────────
+  // 既存建物には触れない。配布履歴も作らない（配布実績は別の操作）。
+  for (const row of newRows) {
+    const insert = buildInsert(row);
+    if (!insert) {
+      failed++;
+      continue;
+    }
+
+    const { data: inserted, error } = await supabase
+      .from("buildings")
+      .insert(insert)
+      .select("id")
+      .single();
+
+    if (error || !inserted) {
+      failed++;
+      continue;
+    }
+    created++;
+
+    await supabase.from("building_field_updates").insert(
+      row.changes.map((c) => ({
+        batch_id: batch.id,
+        building_id: inserted.id,
+        field_name: c.field,
+        old_value: null,
+        new_value: c.newValue,
+        source: row.csv.source || null,
+        note: row.csv.note || null,
+        updated_by: user.id,
+      })),
+    );
+  }
+
   await supabase
     .from("ai_csv_batches")
-    .update({ applied_count: applied })
+    .update({ applied_count: applied + created })
     .eq("id", batch.id);
 
   revalidatePath("/buildings");
@@ -255,13 +314,56 @@ export async function applyAiCsv(
   return {
     ok: failed === 0,
     message:
-      failed === 0
-        ? `${applied} 件の建物情報を更新しました。`
-        : `${applied} 件を更新しましたが、${failed} 件で失敗しました。`,
+      `${applied} 件を更新、${created} 件を新規登録しました。` +
+      (failed > 0 ? `${failed} 件で失敗しました。` : ""),
     batchId: batch.id,
     applied,
+    created,
     failed,
   };
+}
+
+/**
+ * 新規登録する行を組み立てる。
+ *
+ * 状態や配布実績には触れない。既定値のまま（未配布・配布回数0）で入る。
+ */
+function buildInsert(row: PlannedRow): Record<string, unknown> | null {
+  const get = (field: string) =>
+    row.changes.find((c) => c.field === field)?.newValue ?? null;
+
+  const name = get("building_name");
+  const address = get("address");
+  if (!name || !address) return null;
+
+  const detail = normalizeAddressDetailed(address);
+  const city = extractCity(address);
+
+  const insert: Record<string, unknown> = {
+    building_name: name,
+    normalized_building_name: normalizeBuildingName(name),
+    address,
+    normalized_address: detail.normalized,
+    prefecture: detail.prefecture ?? (city ? findPrefectureByCity(city) : null),
+    city,
+    source: "import",
+  };
+
+  const units = get("total_units");
+  if (units) insert.total_units = Number(units);
+
+  const propertyType = get("property_type");
+  if (propertyType) insert.property_type = propertyType;
+
+  const buildingType = get("building_type");
+  if (buildingType) insert.building_type = buildingType;
+
+  return insert;
+}
+
+/** 住所から市区町村を取り出す。取れなければ null */
+function extractCity(address: string): string | null {
+  return address.match(/([^\s都道府県]+?[市区町村])/)?.[1] ?? null;
 }
 
 /** 更新する列を組み立てる。建物情報の列以外は絶対に入れない */
@@ -299,7 +401,14 @@ export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> 
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
-    return { ok: false, message: "ログインが必要です。", batchId, applied: 0, failed: 0 };
+    return {
+      ok: false,
+      message: "ログインが必要です。",
+      batchId,
+      applied: 0,
+      created: 0,
+      failed: 0,
+    };
   }
 
   const { data: history, error } = await supabase
@@ -309,7 +418,14 @@ export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> 
     .order("id", { ascending: false });
 
   if (error) {
-    return { ok: false, message: `履歴の取得に失敗しました: ${error.message}`, batchId, applied: 0, failed: 0 };
+    return {
+      ok: false,
+      message: `履歴の取得に失敗しました: ${error.message}`,
+      batchId,
+      applied: 0,
+      created: 0,
+      failed: 0,
+    };
   }
 
   let restored = 0;
@@ -358,6 +474,7 @@ export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> 
         : `${restored} 項目を戻しましたが、${failed} 件で失敗しました。`,
     batchId,
     applied: restored,
+    created: 0,
     failed,
   };
 }
