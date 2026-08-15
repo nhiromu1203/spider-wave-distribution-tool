@@ -596,3 +596,68 @@ describe("新規登録の条件", () => {
     ).toBe("照合不可");
   });
 });
+
+describe("漢数字の丁目", () => {
+  /**
+   * 実データで発覚した不具合。
+   * 位置参照情報から補完した住所は「西日暮里二丁目26」の形で入るのに対し、
+   * 調査結果は「西日暮里2丁目26番10号」と書かれる。
+   * 漢数字を直さずに比べていたため、既存建物が見つからず
+   * すべて新規登録として扱われていた。
+   */
+  const db = building({
+    id: "b1",
+    address: "東京都荒川区西日暮里二丁目26",
+  });
+
+  it("漢数字と算用数字の丁目を同じものとして扱う", () => {
+    const { rows } = parseAiCsv(
+      csv(
+        row({
+          building_id: "",
+          building_name: "メゾン丸十",
+          address: "東京都荒川区西日暮里2丁目26番10号",
+          total_units: "12",
+        }),
+      ),
+    );
+    const plan = planAiCsvImport(rows, [db], { allowCreate: true });
+
+    expect(plan.rows[0].verdict).toBe("更新可能");
+    expect(plan.rows[0].matched?.id).toBe("b1");
+  });
+
+  it("漢数字でも丁目が違えば別の建物", () => {
+    const { rows } = parseAiCsv(
+      csv(
+        row({
+          building_id: "",
+          building_name: "別の建物",
+          address: "東京都荒川区西日暮里3丁目26番10号",
+        }),
+      ),
+    );
+    const plan = planAiCsvImport(rows, [db], { allowCreate: true });
+
+    expect(plan.rows[0].verdict).toBe("新規登録");
+  });
+
+  it("十一丁目のような表記も扱える", () => {
+    const { rows } = parseAiCsv(
+      csv(
+        row({
+          building_id: "",
+          building_name: "テスト",
+          address: "東京都荒川区○○11丁目5番1号",
+        }),
+      ),
+    );
+    const plan = planAiCsvImport(
+      rows,
+      [building({ id: "x", address: "東京都荒川区○○十一丁目5" })],
+      { allowCreate: true },
+    );
+
+    expect(plan.rows[0].verdict).toBe("更新可能");
+  });
+});

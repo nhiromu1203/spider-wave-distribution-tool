@@ -12,7 +12,11 @@
  */
 
 import { parseCsv } from "@/lib/building-names/csv";
-import { blockKeyOf, parseBlockKey } from "@/lib/building-names/block-key";
+import {
+  blockKeyOf,
+  parseBlockKey,
+  parseChomeNumber,
+} from "@/lib/building-names/block-key";
 import { normalizeBuildingName } from "@/lib/building-matching";
 
 export const AI_CSV_COLUMNS = [
@@ -294,10 +298,20 @@ export function parsePropertyType(
   };
 }
 
-/** 比較用に住所を寄せる（全角・空白・区切りのゆれを吸収） */
+/**
+ * 比較用に住所を寄せる（全角・空白・区切りのゆれを吸収）。
+ *
+ * 丁目は漢数字で入っていることがある。位置参照情報から補完した住所は
+ * 「西日暮里二丁目26」の形で、調査結果の「西日暮里2丁目26番10号」とは
+ * そのままでは一致しない。先に漢数字を算用数字へ直しておく。
+ */
 function canonicalAddress(address: string): string {
   return address
     .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/([一二三四五六七八九十]+)丁目/g, (_, kanji: string) => {
+      const n = parseChomeNumber(kanji);
+      return n === null ? `${kanji}丁目` : `${n}丁目`;
+    })
     .replace(/[－―ー‐‑–—−]/g, "-")
     .replace(/[丁目番地]/g, "-")
     .replace(/号/g, "")
