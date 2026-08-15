@@ -1,5 +1,5 @@
 import { AreaSync } from "@/components/AreaSync";
-import { NameCompletion } from "@/components/NameCompletion";
+import { NameCsvPanel } from "@/components/NameCsvPanel";
 import { BuildingFilterBar } from "@/components/BuildingFilterBar";
 import { BuildingTable } from "@/components/BuildingTable";
 import { DashboardCounts } from "@/components/DashboardCounts";
@@ -77,7 +77,7 @@ export default async function BuildingsPage({
         </p>
       )}
 
-      <NameCompletion prefecture={filters.prefecture} city={filters.city} />
+      <NameCsvPanel prefecture={filters.prefecture} city={filters.city} />
 
       <BuildingTable rows={list.rows} />
 
