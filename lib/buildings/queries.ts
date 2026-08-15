@@ -239,7 +239,7 @@ export type StatusCounts = Record<BuildingStatus, number>;
  * ダッシュボード上部の件数。
  *
  * 一覧（fetchBuildings）と数字が食い違わないよう、
- *   ・参照先        building_list_view
+ *   ・参照先        buildings
  *   ・ステータス条件 .in("status", [...])
  *   ・絞り込み       applyCommonFilters
  * をすべて一覧と同一にしてある。片方だけ buildings テーブルを見ると、
@@ -307,7 +307,7 @@ export async function fetchStatusCounts(
       }
       if (process.env.DEBUG_BUILDING_COUNTS === "1") {
         console.log(
-          `[fetchStatusCounts] ${buildingStatus}: ${count ?? 0} 件（参照先 building_list_view / 条件は一覧と同一）`,
+          `[fetchStatusCounts] ${buildingStatus}: ${count ?? 0} 件（参照先 buildings / 条件は一覧と同一）`,
         );
       }
       return [buildingStatus, count ?? 0] as const;
