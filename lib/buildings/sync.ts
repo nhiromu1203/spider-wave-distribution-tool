@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { resolveBuildingDataSource, sourceSupportsArea } from "@/lib/data-sources";
 import { ingestBuildings } from "./ingest";
+import { isAreaSyncEnabled } from "./sync-config";
 
 export type AreaSyncResult = {
   ok: boolean;
@@ -72,6 +73,19 @@ export async function syncAreaBuildings(area: {
 
   if (!area.prefecture || !area.city) {
     return { ok: false, message: "都道府県と市区町村を選択してください。", ...empty };
+  }
+
+  // 画面表示・リロード・エリア選択で建物が増えないための歯止め。
+  // 画面側だけで止めても、この関数を直接呼ばれれば登録されてしまうため
+  // サーバー側で断る。
+  if (!isAreaSyncEnabled()) {
+    return {
+      ok: false,
+      message:
+        "建物データの自動取得は停止しています。建物マスタは CSV 取込で管理してください。" +
+        "（取得元から登録する場合は BUILDING_AUTO_SYNC=1 を設定してください）",
+      ...empty,
+    };
   }
 
   const supabase = await createClient();

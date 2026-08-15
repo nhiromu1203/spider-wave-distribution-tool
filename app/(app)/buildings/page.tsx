@@ -12,6 +12,7 @@ import {
   fetchStatusCounts,
 } from "@/lib/buildings/queries";
 import { refreshCsvAreas, resolveBuildingDataSource } from "@/lib/data-sources";
+import { isAreaSyncEnabled } from "@/lib/buildings/sync-config";
 import { isUnitCountAvailable } from "@/lib/data-sources/unit-count";
 
 export const dynamic = "force-dynamic";
@@ -60,6 +61,7 @@ export default async function BuildingsPage({
         syncedBuildingCount={areaCount}
         sourceLabel={active?.label ?? selected?.label ?? null}
         sourceUnavailableReason={unavailableReason}
+        syncEnabled={isAreaSyncEnabled()}
         selectedSourceId={selectedId}
       />
 

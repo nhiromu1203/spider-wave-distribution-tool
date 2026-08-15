@@ -1,15 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { syncAreaBuildings, type AreaSyncResult } from "@/lib/buildings/sync";
 
 /**
  * 選択されたエリアの建物一覧を取得元から読み込む。
  *
- * まだ一度も取り込んでいないエリアを選んだ場合は自動で取得する
- * （ユーザーはエリアを選ぶだけで一覧が表示される）。
- * 取得済みエリアでは自動実行せず、再取得ボタンだけを出す。
+ * ── 自動取得はしない ────────────────────────────────────────
+ * 以前は「取り込み済みが 0 件なら自動で取得する」作りだった。
+ * 建物マスタを CSV で作り直すと取得元由来は 0 件のままになるため、
+ * 画面を開くたびに取得・登録され、建物が際限なく増えた。
+ *
+ * 建物マスタの正は CSV。ここでは何もせず、明示的に許可された
+ * ときだけ手動の取得ボタンを出す。
+ * ────────────────────────────────────────────────────────────
  */
 export function AreaSync({
   prefecture,
@@ -19,6 +24,7 @@ export function AreaSync({
   sourceLabel,
   sourceUnavailableReason,
   selectedSourceId,
+  syncEnabled,
 }: {
   prefecture: string | null;
   city: string | null;
@@ -27,6 +33,8 @@ export function AreaSync({
   sourceLabel: string | null;
   sourceUnavailableReason: string | null;
   selectedSourceId: string;
+  /** 取得元からの登録が許可されているか（既定は不許可） */
+  syncEnabled: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -35,8 +43,6 @@ export function AreaSync({
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
-  // 同じエリアに対して自動取得を二重実行しないための番人
-  const autoLoadedRef = useRef<string | null>(null);
 
   /**
    * 区全体を取り込む。
@@ -80,20 +86,10 @@ export function AreaSync({
     });
   }, [prefecture, city, town, router]);
 
-  useEffect(() => {
-    if (!prefecture || !city) return;
-    if (sourceUnavailableReason) return;
-    if (syncedBuildingCount > 0) return;
-
-    const key = `${prefecture}/${city}`;
-    if (autoLoadedRef.current === key) return;
-    autoLoadedRef.current = key;
-    run();
-  }, [prefecture, city, syncedBuildingCount, sourceUnavailableReason, run]);
 
   // 取得元が使えないことは、エリア選択の有無より先に伝える。
   // 代わりの取得元へ勝手に切り替えないため、ここで手を止めてもらう。
-  if (sourceUnavailableReason) {
+  if (syncEnabled && sourceUnavailableReason) {
     return (
       <div className="card border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
         <p className="font-semibold">建物データの取得元が利用できません</p>
@@ -114,7 +110,7 @@ export function AreaSync({
     return (
       <div className="card border-[var(--accent)] bg-blue-50 p-3 text-sm">
         上の <strong>対象エリア</strong> から都道府県と市区町村を選択してください。
-        選択した区の建物一覧が自動で表示されます。
+        選択した区の建物一覧が表示されます。
       </div>
     );
   }
@@ -130,9 +126,15 @@ export function AreaSync({
         <span className="text-xs text-[var(--text-muted)]">取得元：{sourceLabel}</span>
       )}
 
-      <button type="button" className="btn" onClick={run} disabled={pending}>
-        {pending ? "取得中…" : "建物データを再取得"}
-      </button>
+      {syncEnabled ? (
+        <button type="button" className="btn" onClick={run} disabled={pending}>
+          {pending ? "取得中…" : "建物データを再取得"}
+        </button>
+      ) : (
+        <span className="text-xs text-[var(--text-muted)]">
+          建物マスタは CSV 取込で管理しています。取得元からの自動登録は停止中です。
+        </span>
+      )}
 
       {pending && (
         <span className="text-[var(--text-muted)]">
