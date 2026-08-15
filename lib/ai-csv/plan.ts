@@ -17,6 +17,9 @@ import { blockKeyOf, parseBlockKey } from "@/lib/building-names/block-key";
 export const AI_CSV_COLUMNS = [
   "building_id",
   "building_name",
+  // 現在 DB に入っている住所。調べる人が元の住所を見ながら
+  // address 列を埋められるようにするための参考欄で、更新には使わない。
+  "current_address",
   "address",
   "total_units",
   "property_type",
@@ -44,6 +47,44 @@ const PROPERTY_TYPE_FROM_CSV: Record<string, string> = {
   condominium: "condominium",
   unknown: "unknown",
 };
+
+/**
+ * source に書いてよい値。
+ *
+ * 自由入力にすると表記が散らばり、あとから「どの調査によるものか」を
+ * 追えなくなる。使う手段は限られているので、その一覧に絞る。
+ */
+export const ALLOWED_SOURCES = [
+  "chatgpt",
+  "claude",
+  "homes",
+  "suumo",
+  "google_maps",
+  "manual",
+] as const;
+
+export type AllowedSource = (typeof ALLOWED_SOURCES)[number];
+
+/** 大文字小文字と前後の空白だけ吸収する。それ以外は認めない */
+export function parseSource(
+  raw: string,
+): { ok: true; value: AllowedSource } | { ok: false; reason: string } {
+  const v = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+  if (v === "") {
+    return {
+      ok: false,
+      reason: `source が未記入です。${ALLOWED_SOURCES.join(" / ")} のいずれかを記入してください。`,
+    };
+  }
+  if (!ALLOWED_SOURCES.includes(v as AllowedSource)) {
+    return {
+      ok: false,
+      reason: `source「${raw.trim()}」は使えません。${ALLOWED_SOURCES.join(" / ")} のいずれかを記入してください。`,
+    };
+  }
+  return { ok: true, value: v as AllowedSource };
+}
 
 export type AiCsvRow = {
   building_id: string;
@@ -196,20 +237,44 @@ export function parseTotalUnits(
   return { ok: true, value: n };
 }
 
-/** CSV の property_type をアプリの値へ。対応が無ければ変換しない */
+/**
+ * CSV の property_type をアプリの値へ。
+ *
+ * 調査結果は「賃貸マンション」「分譲マンション」のように書かれることが多い。
+ * 賃貸か分譲かが読み取れれば、その語を含む書き方は受け入れる。
+ *
+ * ただし両方を含む（「賃貸・分譲」など）ものはどちらとも決められないので
+ * 変換しない。推測して取り違えるより、要確認に回すほうが安全。
+ */
 export function parsePropertyType(
   raw: string,
 ): { ok: true; value: string } | { ok: false; reason: string | null } {
   const v = raw.trim();
   if (v === "") return { ok: false, reason: null };
-  const mapped = PROPERTY_TYPE_FROM_CSV[v];
-  if (!mapped) {
+
+  const exact = PROPERTY_TYPE_FROM_CSV[v];
+  if (exact) return { ok: true, value: exact };
+
+  const normalized = v.toLowerCase();
+  const isRental = v.includes("賃貸") || normalized.includes("rental");
+  const isCondo =
+    v.includes("分譲") ||
+    v.includes("マンション（分譲）") ||
+    normalized.includes("condominium");
+
+  if (isRental && isCondo) {
     return {
       ok: false,
-      reason: `物件種別「${v}」は既存の区分（賃貸 / 分譲 / 不明）に当てはまりません。`,
+      reason: `物件種別「${v}」は賃貸と分譲の両方を含んでいて判断できません。`,
     };
   }
-  return { ok: true, value: mapped };
+  if (isRental) return { ok: true, value: "rental" };
+  if (isCondo) return { ok: true, value: "condominium" };
+
+  return {
+    ok: false,
+    reason: `物件種別「${v}」は既存の区分（賃貸 / 分譲 / 不明）に当てはまりません。`,
+  };
 }
 
 /** 比較用に住所を寄せる（全角・空白・区切りのゆれを吸収） */
@@ -397,6 +462,13 @@ export function planAiCsvImport(
     } else if (propertyType.reason) {
       needsReview = true;
       reasons.push(propertyType.reason);
+    }
+
+    // 調査手段。決められた値でなければ、変更内容が正しくても反映しない
+    const source = parseSource(csv.source);
+    if (!source.ok) {
+      needsReview = true;
+      reasons.push(source.reason);
     }
 
     // ── 行としての判定 ────────────────────────────────────
