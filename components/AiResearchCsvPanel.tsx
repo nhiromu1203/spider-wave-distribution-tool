@@ -55,6 +55,7 @@ export function AiResearchCsvPanel() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [message, setMessage] = useState<string | null>(null);
   const [lastBatch, setLastBatch] = useState<string | null>(null);
+  const [overwrite, setOverwrite] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const rows = preview?.plan.rows ?? [];
@@ -63,12 +64,13 @@ export function AiResearchCsvPanel() {
     [rows],
   );
 
-  const read = useCallback((file: File) => {
+  const read = useCallback(
+    (file: File, overwriteExisting: boolean) => {
     startTransition(async () => {
       const text = await file.text();
       setCsvText(text);
       setFileName(file.name);
-      const result = await previewAiCsv(text);
+      const result = await previewAiCsv(text, { overwriteExisting });
       setPreview(result);
       setMessage(result.message);
       // 競合・要確認は既定で選ばない
@@ -78,7 +80,9 @@ export function AiResearchCsvPanel() {
         ),
       );
     });
-  }, []);
+    },
+    [],
+  );
 
   const toggle = (line: number) =>
     setSelected((prev) => {
@@ -91,7 +95,9 @@ export function AiResearchCsvPanel() {
   const apply = useCallback(() => {
     if (!csvText) return;
     startTransition(async () => {
-      const result = await applyAiCsv(csvText, [...selected], fileName);
+      const result = await applyAiCsv(csvText, [...selected], fileName, {
+        overwriteExisting: overwrite,
+      });
       setMessage(result.message);
       setLastBatch(result.batchId);
       setPreview(null);
@@ -99,7 +105,7 @@ export function AiResearchCsvPanel() {
       if (inputRef.current) inputRef.current.value = "";
       router.refresh();
     });
-  }, [csvText, selected, fileName, router]);
+  }, [csvText, selected, fileName, overwrite, router]);
 
   const rollback = useCallback(() => {
     if (!lastBatch) return;
@@ -148,18 +154,42 @@ export function AiResearchCsvPanel() {
             disabled={pending}
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) read(file);
+              if (file) read(file, overwrite);
             }}
           />
         </label>
       </div>
+
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={overwrite}
+          disabled={pending}
+          onChange={(e) => {
+            setOverwrite(e.target.checked);
+            // 判断が変わるため、読み込み済みの内容は破棄して選び直してもらう
+            setPreview(null);
+            setCsvText(null);
+            setSelected(new Set());
+            if (inputRef.current) inputRef.current.value = "";
+          }}
+        />
+        <span>
+          既存値も CSV で上書きする
+          <span className="block text-xs text-[var(--text-muted)]">
+            対象は建物名・総世帯数・所有形態・建物種別のみです。住所は「より詳細になった場合」の規則のままで、
+            配布履歴・配布済み判定・座標・担当者は変更しません。
+          </span>
+        </span>
+      </label>
 
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
           const file = e.dataTransfer.files?.[0];
-          if (file) read(file);
+          if (file) read(file, overwrite);
         }}
         className="rounded-sm border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--text-muted)]"
       >
@@ -231,7 +261,8 @@ export function AiResearchCsvPanel() {
                   <th className="py-1 pr-3">建物名</th>
                   <th className="py-1 pr-3">住所</th>
                   <th className="py-1 pr-3">総世帯数</th>
-                  <th className="py-1 pr-3">種別</th>
+                  <th className="py-1 pr-3">所有形態</th>
+                  <th className="py-1 pr-3">建物種別</th>
                   <th className="py-1 pr-3">source</th>
                   <th className="py-1">note / 理由</th>
                 </tr>
@@ -242,6 +273,7 @@ export function AiResearchCsvPanel() {
                   const address = fieldValue(row, "address");
                   const units = fieldValue(row, "total_units");
                   const type = fieldValue(row, "property_type");
+                  const kind = fieldValue(row, "building_type");
 
                   return (
                     <tr key={row.line} className="border-t border-[var(--border)] align-top">
@@ -307,6 +339,19 @@ export function AiResearchCsvPanel() {
                         ) : (
                           <span className="text-[var(--text-muted)]">
                             {PROPERTY_TYPE_LABELS[row.matched?.property_type ?? ""] ?? "—"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1 pr-3">
+                        {kind ? (
+                          <>
+                            <span className="text-[var(--text-muted)]">{kind[0]}</span>
+                            {" → "}
+                            <strong>{kind[1]}</strong>
+                          </>
+                        ) : (
+                          <span className="text-[var(--text-muted)]">
+                            {row.matched?.building_type ?? "—"}
                           </span>
                         )}
                       </td>

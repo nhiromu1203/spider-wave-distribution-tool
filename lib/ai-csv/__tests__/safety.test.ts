@@ -34,6 +34,7 @@ const ALLOWED = [
   "normalized_address",
   "total_units",
   "property_type",
+  "building_type",
   "name_source",
   "name_decided_at",
 ];
@@ -88,7 +89,8 @@ describe("反映の手順", () => {
     const body = await code();
     const apply = body.slice(body.indexOf("export async function applyAiCsv"));
 
-    expect(apply).toContain("await previewAiCsv(text)");
+    // 上書きの指定も含めて、同じ条件で判定し直していること
+    expect(apply).toContain("await previewAiCsv(text, options)");
   });
 
   it("更新可能な行以外は、選ばれていても反映しない", async () => {

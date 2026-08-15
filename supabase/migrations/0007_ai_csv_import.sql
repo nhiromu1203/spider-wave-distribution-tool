@@ -51,7 +51,7 @@ create table if not exists public.building_field_updates (
   updated_by  uuid references auth.users(id),
 
   constraint building_field_updates_field_allowed check (
-    field_name in ('building_name', 'address', 'total_units', 'property_type')
+    field_name in ('building_name', 'address', 'total_units', 'property_type', 'building_type')
   )
 );
 

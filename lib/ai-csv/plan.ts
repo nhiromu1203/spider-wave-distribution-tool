@@ -23,6 +23,7 @@ export const AI_CSV_COLUMNS = [
   "address",
   "total_units",
   "property_type",
+  "building_type",
   "source",
   "note",
 ] as const;
@@ -92,6 +93,8 @@ export type AiCsvRow = {
   address: string;
   total_units: string;
   property_type: string;
+  /** 建物種別（マンション・アパートなど）。所有形態とは別 */
+  building_type: string;
   source: string;
   note: string;
   line: number;
@@ -109,12 +112,18 @@ export type CurrentBuilding = {
   city: string | null;
   total_units: number | null;
   property_type: string;
+  building_type: string | null;
   latitude: number | null;
   longitude: number | null;
 };
 
 export type FieldChange = {
-  field: "building_name" | "address" | "total_units" | "property_type";
+  field:
+    | "building_name"
+    | "address"
+    | "total_units"
+    | "property_type"
+    | "building_type";
   oldValue: string | null;
   newValue: string;
 };
@@ -205,6 +214,7 @@ export function parseAiCsv(text: string): {
       address: get("address"),
       total_units: get("total_units"),
       property_type: get("property_type"),
+      building_type: get("building_type"),
       source: get("source"),
       note: get("note"),
       line: i,
@@ -348,17 +358,37 @@ export function decideAddress(
 /**
  * CSV の各行について、既存建物と突き合わせて何をするか決める。
  */
+export type PlanOptions = {
+  /**
+   * 既に値が入っていても CSV の内容で置き換える。
+   *
+   * 建物名・総世帯数・所有形態・建物種別だけが対象。
+   * 住所は対象にしない（詳細になった場合のみ更新する規則は変えない）。
+   */
+  overwriteExisting?: boolean;
+};
+
 export function planAiCsvImport(
   rows: AiCsvRow[],
   current: CurrentBuilding[],
+  options: PlanOptions = {},
 ): ImportPlan {
+  const overwrite = options.overwriteExisting === true;
   const byId = new Map(current.map((b) => [b.id, b]));
 
   // building_id が無い CSV 用。住所で引けるようにしておく
   const byAddress = new Map<string, CurrentBuilding[]>();
+  // 号まで一致しない場合に備え、街区（町＋丁目＋番）でも引けるようにする。
+  // こちらの住所は街区までしか無いことが多く、CSV 側には号が入るため、
+  // 完全一致だけでは引き当てられない。
+  const byBlock = new Map<string, CurrentBuilding[]>();
+
   for (const b of current) {
     const key = canonicalAddress(b.address);
     byAddress.set(key, [...(byAddress.get(key) ?? []), b]);
+
+    const block = blockKeyOf(b.address);
+    if (block) byBlock.set(block, [...(byBlock.get(block) ?? []), b]);
   }
 
   const planned: PlannedRow[] = [];
@@ -372,14 +402,32 @@ export function planAiCsvImport(
       matched = byId.get(csv.building_id) ?? null;
       if (!matched) reasons.push(`building_id が見つかりません（${csv.building_id}）。`);
     } else if (csv.address) {
-      const candidates = byAddress.get(canonicalAddress(csv.address)) ?? [];
-      if (candidates.length === 1) {
-        matched = candidates[0];
+      const exact = byAddress.get(canonicalAddress(csv.address)) ?? [];
+
+      if (exact.length === 1) {
+        matched = exact[0];
         reasons.push("building_id が無いため住所で照合しました。");
-      } else if (candidates.length > 1) {
-        reasons.push(`同じ住所に ${candidates.length} 件あり、1 件に絞れません。`);
+      } else if (exact.length > 1) {
+        reasons.push(`同じ住所に ${exact.length} 件あり、1 件に絞れません。`);
       } else {
-        reasons.push("住所に一致する建物がありません。");
+        // 号まで一致しない場合、街区で引き直す。
+        // 街区に 1 件しかないときだけ採用する。複数あると
+        // どの棟か決められないため。
+        const block = blockKeyOf(csv.address);
+        const inBlock = block ? (byBlock.get(block) ?? []) : [];
+
+        if (inBlock.length === 1) {
+          matched = inBlock[0];
+          reasons.push(
+            `号まで一致する建物が無いため、街区（${block}）で照合しました。`,
+          );
+        } else if (inBlock.length > 1) {
+          reasons.push(
+            `街区（${block}）に ${inBlock.length} 件あり、どの棟か決められません。`,
+          );
+        } else {
+          reasons.push("住所に一致する建物がありません。");
+        }
       }
     } else {
       reasons.push("building_id と住所のどちらもありません。");
@@ -414,10 +462,22 @@ export function planAiCsvImport(
           newValue: csvName,
         });
       } else if (matched.building_name?.trim() !== csvName) {
-        nameConflict = true;
-        reasons.push(
-          `既に「${matched.building_name}」が入っています。CSV は「${csvName}」です。`,
-        );
+        if (overwrite) {
+          // 上書きモードでは、既存の名前も CSV の内容に置き換える
+          changes.push({
+            field: "building_name",
+            oldValue: matched.building_name,
+            newValue: csvName,
+          });
+          reasons.push(
+            `既存の「${matched.building_name}」を上書きします。`,
+          );
+        } else {
+          nameConflict = true;
+          reasons.push(
+            `既に「${matched.building_name}」が入っています。CSV は「${csvName}」です。`,
+          );
+        }
       }
     }
 
@@ -462,6 +522,16 @@ export function planAiCsvImport(
     } else if (propertyType.reason) {
       needsReview = true;
       reasons.push(propertyType.reason);
+    }
+
+    // 建物種別（マンション・アパートなど）。所有形態とは別の情報
+    const buildingType = csv.building_type.trim();
+    if (buildingType && buildingType !== (matched.building_type ?? "")) {
+      changes.push({
+        field: "building_type",
+        oldValue: matched.building_type,
+        newValue: buildingType,
+      });
     }
 
     // 調査手段。決められた値でなければ、変更内容が正しくても反映しない

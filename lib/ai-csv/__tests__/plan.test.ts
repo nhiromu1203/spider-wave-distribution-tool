@@ -12,7 +12,7 @@ import {
 } from "../plan";
 
 const HEADER =
-  "building_id,building_name,current_address,address,total_units,property_type,source,note";
+  "building_id,building_name,current_address,address,total_units,property_type,building_type,source,note";
 
 function csv(...lines: string[]): string {
   return [HEADER, ...lines].join("\n");
@@ -28,6 +28,7 @@ function building(over: Partial<CurrentBuilding> = {}): CurrentBuilding {
     city: "荒川区",
     total_units: null,
     property_type: "unknown",
+    building_type: null,
     latitude: 35.73,
     longitude: 139.78,
     ...over,
@@ -43,6 +44,7 @@ function row(over: Partial<Record<string, string>> = {}): string {
     address: "",
     total_units: "",
     property_type: "",
+    building_type: "",
     source: "chatgpt",
     note: "",
     ...over,
@@ -54,6 +56,7 @@ function row(over: Partial<Record<string, string>> = {}): string {
     v.address,
     v.total_units,
     v.property_type,
+    v.building_type,
     v.source,
     v.note,
   ].join(",");
@@ -350,5 +353,112 @@ describe("テンプレートの列", () => {
     );
 
     expect(plan.rows[0].changes.map((c) => c.field)).toEqual(["building_name"]);
+  });
+});
+
+describe("号まで一致しない住所の照合", () => {
+  /**
+   * 実際に起きた不具合。
+   * CSV は「3丁目12番5号」、DB は「3丁目12」で、完全一致しないため
+   * 照合不可になり、画面で建物名が「—」総世帯数が「不明」と表示されていた。
+   */
+  it("街区に1件だけなら、号が余分でも照合する", () => {
+    const plan = planOf(
+      row({
+        building_id: "",
+        building_name: "コーポ東尾久",
+        address: "東京都荒川区東日暮里3丁目12番5号",
+        total_units: "32",
+      }),
+      [building()],
+    );
+
+    expect(plan.rows[0].verdict).toBe("更新可能");
+    expect(plan.rows[0].matched?.id).toBe("b1");
+    expect(plan.rows[0].changes.map((c) => c.field)).toContain("building_name");
+    expect(plan.rows[0].changes.map((c) => c.field)).toContain("total_units");
+  });
+
+  it("街区に複数あるときは照合しない（取り違えを防ぐ）", () => {
+    const plan = planOf(
+      row({ building_id: "", address: "東京都荒川区東日暮里3丁目12番5号" }),
+      [building({ id: "b1" }), building({ id: "b2" })],
+    );
+
+    expect(plan.rows[0].verdict).toBe("照合不可");
+    expect(plan.rows[0].reasons.join()).toContain("決められません");
+  });
+
+  it("別の街区には広がらない", () => {
+    const plan = planOf(
+      row({ building_id: "", address: "東京都荒川区東日暮里3丁目99番1号" }),
+      [building()],
+    );
+
+    expect(plan.rows[0].verdict).toBe("照合不可");
+  });
+});
+
+describe("上書きモード", () => {
+  const line = row({
+    building_name: "新しい名前",
+    total_units: "40",
+    property_type: "分譲",
+    building_type: "マンション",
+  });
+  const existing = building({
+    building_name: "既存マンション",
+    total_units: 10,
+    property_type: "rental",
+    building_type: "アパート",
+  });
+
+  function planWith(overwrite: boolean) {
+    const { rows } = parseAiCsv(csv(line));
+    return planAiCsvImport(rows, [existing], { overwriteExisting: overwrite });
+  }
+
+  it("既定では既存の建物名を守る", () => {
+    expect(planWith(false).rows[0].verdict).toBe("建物名競合");
+  });
+
+  it("上書きモードでは4項目すべてを置き換える", () => {
+    const r = planWith(true).rows[0];
+
+    expect(r.verdict).toBe("更新可能");
+    expect(r.changes.map((c) => c.field).sort()).toEqual([
+      "building_name",
+      "building_type",
+      "property_type",
+      "total_units",
+    ]);
+  });
+
+  it("上書きモードでも住所の規則は変えない", () => {
+    const { rows } = parseAiCsv(
+      csv(row({ address: "東京都荒川区西日暮里3丁目12番5号" })),
+    );
+    const plan = planAiCsvImport(rows, [building()], { overwriteExisting: true });
+
+    expect(plan.rows[0].verdict).toBe("住所競合");
+    expect(plan.rows[0].changes).toHaveLength(0);
+  });
+});
+
+describe("建物種別", () => {
+  it("未設定なら更新できる", () => {
+    const plan = planOf(row({ building_type: "マンション" }), [building()]);
+
+    expect(plan.rows[0].changes).toEqual([
+      { field: "building_type", oldValue: null, newValue: "マンション" },
+    ]);
+  });
+
+  it("同じ値なら変更なし", () => {
+    const plan = planOf(row({ building_type: "アパート" }), [
+      building({ building_type: "アパート" }),
+    ]);
+
+    expect(plan.rows[0].verdict).toBe("変更なし");
   });
 });

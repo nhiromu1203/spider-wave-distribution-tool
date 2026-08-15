@@ -33,6 +33,12 @@ import {
   type PlannedRow,
 } from "./plan";
 
+/** 取込時の指定 */
+export type ImportOptions = {
+  /** 既存値も CSV で置き換える（建物名・総世帯数・所有形態・建物種別のみ） */
+  overwriteExisting?: boolean;
+};
+
 export type PreviewResult = {
   ok: boolean;
   message: string;
@@ -47,7 +53,10 @@ export async function buildTemplateCsv(): Promise<string> {
 /**
  * 取込内容を確認する。ここでは DB を一切変更しない。
  */
-export async function previewAiCsv(text: string): Promise<PreviewResult> {
+export async function previewAiCsv(
+  text: string,
+  options: ImportOptions = {},
+): Promise<PreviewResult> {
   const emptyPlan: ImportPlan = {
     rows: [],
     errors: [],
@@ -80,7 +89,7 @@ export async function previewAiCsv(text: string): Promise<PreviewResult> {
 
   // ── 突き合わせ相手を集める ────────────────────────────────
   const columns =
-    "id,building_name,address,normalized_address,prefecture,city,total_units,property_type,latitude,longitude";
+    "id,building_name,address,normalized_address,prefecture,city,total_units,property_type,building_type,latitude,longitude";
   const current: CurrentBuilding[] = [];
 
   const ids = rows.map((r) => r.building_id).filter(Boolean);
@@ -111,7 +120,9 @@ export async function previewAiCsv(text: string): Promise<PreviewResult> {
     }
   }
 
-  const plan = planAiCsvImport(rows, current);
+  const plan = planAiCsvImport(rows, current, {
+    overwriteExisting: options.overwriteExisting === true,
+  });
   plan.errors = errors;
   plan.counts.error = errors.length;
 
@@ -143,6 +154,7 @@ export async function applyAiCsv(
   text: string,
   selectedLines: number[],
   fileName: string | null,
+  options: ImportOptions = {},
 ): Promise<ApplyResult> {
   const supabase = await createClient();
   const {
@@ -152,7 +164,7 @@ export async function applyAiCsv(
     return { ok: false, message: "ログインが必要です。", batchId: null, applied: 0, failed: 0 };
   }
 
-  const preview = await previewAiCsv(text);
+  const preview = await previewAiCsv(text, options);
   if (!preview.ok) {
     return {
       ok: false,
@@ -269,6 +281,8 @@ function buildPatch(row: PlannedRow): Record<string, unknown> {
       patch.total_units = Number(change.newValue);
     } else if (change.field === "property_type") {
       patch.property_type = change.newValue;
+    } else if (change.field === "building_type") {
+      patch.building_type = change.newValue;
     }
   }
 
@@ -316,6 +330,8 @@ export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> 
       patch.total_units = h.old_value === null ? null : Number(h.old_value);
     } else if (field === "property_type") {
       patch.property_type = h.old_value ?? "unknown";
+    } else if (field === "building_type") {
+      patch.building_type = h.old_value;
     } else continue;
 
     const { error: updateError } = await supabase
