@@ -131,7 +131,7 @@ describe("実際に送信される URL の検証", () => {
   it("or パラメータが 2 つ以上にならない（重複すると条件が消える）", async () => {
     const url = await captureUrl((client) =>
       applyCommonFilters(
-        client.from("building_list_view").select("id").in("status", baseFilters.statuses),
+        client.from("buildings").select("id").in("status", baseFilters.statuses),
         baseFilters,
       ) as PromiseLike<unknown>,
     );
@@ -142,7 +142,7 @@ describe("実際に送信される URL の検証", () => {
   it("キーワードと世帯数を同時指定しても or は 1 つ", async () => {
     const url = await captureUrl((client) =>
       applyCommonFilters(
-        client.from("building_list_view").select("id").in("status", baseFilters.statuses),
+        client.from("buildings").select("id").in("status", baseFilters.statuses),
         { ...baseFilters, keyword: "メゾン" },
       ) as PromiseLike<unknown>,
     );
@@ -158,7 +158,7 @@ describe("実際に送信される URL の検証", () => {
     // prefecture を条件に入れると、値が NULL の行が落ちてしまう。
     const url = await captureUrl((client) =>
       applyCommonFilters(
-        client.from("building_list_view").select("id").in("status", baseFilters.statuses),
+        client.from("buildings").select("id").in("status", baseFilters.statuses),
         baseFilters,
       ) as PromiseLike<unknown>,
     );
@@ -170,7 +170,7 @@ describe("実際に送信される URL の検証", () => {
   it("市区町村が未指定なら prefecture で厳密に絞る", async () => {
     const url = await captureUrl((client) =>
       applyCommonFilters(
-        client.from("building_list_view").select("id").in("status", baseFilters.statuses),
+        client.from("buildings").select("id").in("status", baseFilters.statuses),
         { ...baseFilters, city: null },
       ) as PromiseLike<unknown>,
     );
@@ -181,7 +181,7 @@ describe("実際に送信される URL の検証", () => {
   it("他都道府県のデータが混ざらない（city 条件は必ず付く）", async () => {
     const url = await captureUrl((client) =>
       applyCommonFilters(
-        client.from("building_list_view").select("id").in("status", baseFilters.statuses),
+        client.from("buildings").select("id").in("status", baseFilters.statuses),
         baseFilters,
       ) as PromiseLike<unknown>,
     );

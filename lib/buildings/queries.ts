@@ -11,6 +11,7 @@ import type {
   BuildingListRow,
   BuildingStatus,
   DistributionHistoryRow,
+  BuildingRow,
 } from "@/lib/supabase/types";
 import { PAGE_SIZE, type BuildingFilters } from "./filters";
 
@@ -172,8 +173,12 @@ export async function fetchBuildings(
 ): Promise<BuildingListResult> {
   const supabase = await createClient();
 
+  // ── 表示元は public.buildings ────────────────────────────
+  // 以前はビュー（building_list_view）を経由していたが、ビューは
+  // 作成時点の列構成で固定されるため、列を足すたびに実体とずれる。
+  // 一覧は実体テーブルだけを見て、重複候補の件数は別に数える。
   let query = supabase
-    .from("building_list_view")
+    .from("buildings")
     .select("*", { count: "exact" })
     .in("status", filters.statuses);
 
@@ -186,6 +191,10 @@ export async function fetchBuildings(
   if (error) throw new Error(`建物一覧の取得に失敗しました: ${error.message}`);
 
   const total = count ?? 0;
+  const rows = await withPendingDuplicateCounts(
+    supabase,
+    (data ?? []) as BuildingRow[],
+  );
 
   // ── 一時的な診断（ダッシュボードとの件数差を追うため）──────
   // 同じ条件で数えているはずの 2 つが食い違ったら、ここで気づけるようにする。
@@ -194,7 +203,7 @@ export async function fetchBuildings(
       "[fetchBuildings] 一覧の件数:",
       JSON.stringify(
         {
-          参照先: "building_list_view",
+          参照先: "buildings",
           ステータス条件: filters.statuses,
           エリア: {
             prefecture: filters.prefecture,
@@ -217,7 +226,7 @@ export async function fetchBuildings(
   }
 
   return {
-    rows: (data ?? []) as BuildingListRow[],
+    rows,
     total,
     page: filters.page,
     pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
@@ -249,7 +258,7 @@ export async function fetchStatusCounts(
   const results = await Promise.all(
     statuses.map(async (buildingStatus) => {
       let query = supabase
-        .from("building_list_view")
+        .from("buildings")
         .select("id", { count: "exact", head: true })
         .in("status", [buildingStatus]);
       query = applyCommonFilters(query, filters);
@@ -264,7 +273,7 @@ export async function fetchStatusCounts(
         let probeDetail = "";
         try {
           let probe = supabase
-            .from("building_list_view")
+            .from("buildings")
             .select("id")
             .in("status", [buildingStatus])
             .limit(1);
@@ -417,11 +426,56 @@ export async function fetchBuildingById(
 ): Promise<BuildingListRow | null> {
   const supabase = await createClient();
   const { data, error } = await supabase
-    .from("building_list_view")
+    .from("buildings")
     .select("*")
     .eq("id", id)
     .maybeSingle();
 
   if (error) throw new Error(`建物の取得に失敗しました: ${error.message}`);
-  return (data as BuildingListRow) ?? null;
+  if (!data) return null;
+
+  const [row] = await withPendingDuplicateCounts(supabase, [data as BuildingRow]);
+  return row ?? null;
+}
+
+/**
+ * 建物に「確認待ちの重複候補が何件あるか」を添える。
+ *
+ * 以前はビューの中で数えていたが、一覧の表示元を実体テーブルに
+ * 戻したため、ここで別に数えて合成する。重複候補が 0 件でも
+ * 建物は必ず一覧に出す（表示から漏らさない）。
+ */
+async function withPendingDuplicateCounts(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  rows: BuildingRow[],
+): Promise<BuildingListRow[]> {
+  if (rows.length === 0) return [];
+
+  const counts = new Map<string, number>();
+
+  // 件数取得に失敗しても一覧は表示する。バッジが出ないだけに留める。
+  try {
+    const { data } = await supabase
+      .from("duplicate_candidates")
+      .select("new_building_id")
+      .eq("status", "pending")
+      .in(
+        "new_building_id",
+        rows.map((r) => r.id),
+      );
+
+    for (const d of (data ?? []) as Array<{ new_building_id: string }>) {
+      counts.set(
+        d.new_building_id,
+        (counts.get(d.new_building_id) ?? 0) + 1,
+      );
+    }
+  } catch {
+    // バッジ無しで表示を続ける
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    pending_duplicate_count: counts.get(row.id) ?? 0,
+  }));
 }
