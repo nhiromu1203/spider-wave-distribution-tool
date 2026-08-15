@@ -26,8 +26,9 @@ import { blockKeyOf } from "./block-key";
 import { geocodeAddress, GSI_ATTRIBUTION } from "./geocode";
 import { matchBuildingNames, type NameCandidate } from "./match";
 import {
-  discoverChomeUrls,
+  discoverChomeLinks,
   fetchChomeCandidates,
+  getLastFetchFailure,
 } from "./providers/homes-archive";
 import type { NameCompletionSummary, RawNameCandidate } from "./types";
 
@@ -126,17 +127,30 @@ export async function completeBuildingNames(area: {
 
   // ── 未調査の街区だけ外部サイトへ問い合わせる ──────────────
   if (pending.length > 0) {
-    const chomeUrls = await discoverChomeUrls(cityMaster.slug);
-    if (chomeUrls.length === 0) {
-      summary.notes.push("丁目一覧のURLを取得できませんでした。");
+    const chomeLinks = await discoverChomeLinks(cityMaster.slug);
+    if (chomeLinks.length === 0) {
+      // 失敗の理由をそのまま返す。件数 0 だけでは原因が分からない。
+      summary.notes.push(
+        getLastFetchFailure() ?? "丁目一覧のURLを取得できませんでした。",
+      );
+      return summary;
     }
+
+    // 未調査の街区が属する丁目だけを取りにいく。
+    // 索引の全丁目（荒川区なら51件）を舐めると無駄な問い合わせが大量に出る。
+    const wanted = new Set(
+      pending.map((k) => k.split("/").slice(0, 2).join("/")),
+    );
+    const targetLinks = chomeLinks.filter((l) =>
+      wanted.has(`${l.town}/${l.chome}`),
+    );
 
     const collected = new Map<string, RawNameCandidate[]>();
     // 丁目ページ 1 枚で複数の街区がまかなえるため、丁目単位で取りにいく
-    for (const url of chomeUrls) {
+    for (const link of targetLinks) {
       if (collected.size >= BLOCKS_PER_RUN) break;
 
-      const candidates = await fetchChomeCandidates(url);
+      const candidates = await fetchChomeCandidates(link.url);
       let useful = false;
       for (const c of candidates) {
         const key = blockKeyOf(c.address);

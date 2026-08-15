@@ -20,7 +20,7 @@ import "server-only";
  * ────────────────────────────────────────────────────────────
  */
 
-import { blockKeyOf } from "../block-key";
+import { blockKeyOf, parseChomeNumber, toHalfWidth } from "../block-key";
 import type { RawNameCandidate } from "../types";
 
 const ORIGIN = "https://www.homes.co.jp";
@@ -32,6 +32,24 @@ const MIN_INTERVAL_MS = 3_000;
 let lastRequestAt = 0;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 直近の取得が失敗した理由。呼び出し側が原因を伝えられるようにする */
+let lastFailure: string | null = null;
+
+export function getLastFetchFailure(): string | null {
+  return lastFailure;
+}
+
+export class AccessDeniedError extends Error {
+  constructor(url: string) {
+    super(
+      `LIFULL HOME'S から拒否されました（HTTP 403）。${url}\n` +
+        "このサイトは自ら名乗る User-Agent からのアクセスを受け付けません。" +
+        "ブラウザを装えば通りますが、それはアクセス制限の回避にあたるため行いません。",
+    );
+    this.name = "AccessDeniedError";
+  }
+}
 
 async function fetchHtml(url: string): Promise<string | null> {
   const wait = MIN_INTERVAL_MS - (Date.now() - lastRequestAt);
@@ -46,32 +64,79 @@ async function fetchHtml(url: string): Promise<string | null> {
       signal: controller.signal,
       cache: "no-store",
     });
-    if (!response.ok) return null;
+
+    // 403 は「取れなかった」ではなく「断られた」。
+    // 黙って 0 件として扱うと、原因が分からないまま空振りし続ける。
+    if (response.status === 403) {
+      lastFailure = new AccessDeniedError(url).message;
+      return null;
+    }
+    if (!response.ok) {
+      lastFailure = `取得に失敗しました (HTTP ${response.status})。${url}`;
+      return null;
+    }
+
+    lastFailure = null;
     return await response.text();
-  } catch {
+  } catch (error) {
+    lastFailure = `接続できませんでした: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
     return null;
   } finally {
     clearTimeout(timer);
   }
 }
 
-/**
- * 区の住所索引から、丁目ごとの一覧ページ URL を集める。
- * ハッシュ付き URL のため、ここで拾うしかない。
- */
-export async function discoverChomeUrls(citySlug: string): Promise<string[]> {
-  const html = await fetchHtml(`${ORIGIN}/archive/address/tokyo/${citySlug}/`);
-  if (!html) return [];
+/** 丁目の一覧ページ。町名と丁目が分かるので、必要な分だけ取りにいける */
+export type ChomeLink = {
+  url: string;
+  /** 町名（丁目を除く。例: 東日暮里） */
+  town: string;
+  chome: number;
+};
 
+/**
+ * 索引ページの HTML から、丁目ごとの一覧ページを取り出す。
+ *
+ * リンクの直後に「荒川３丁目（238）」のような見出しが入っている。
+ * これを読まないと、どの丁目のページか分からないまま
+ * 全丁目（荒川区なら51件）を取りにいくことになる。
+ */
+export function parseChomeLinks(html: string, citySlug: string): ChomeLink[] {
   const pattern = new RegExp(
-    `href="([^"]*?/archive/list/tokyo/${citySlug}/[^"]*?-addr/)"`,
+    `href="([^"]*?/archive/list/tokyo/${citySlug}/[^"]*?-addr/)"[^>]*>\\s*<span[^>]*>([^<]+)</span>`,
     "g",
   );
-  const urls = new Set<string>();
+
+  const links: ChomeLink[] = [];
+  const seen = new Set<string>();
+
   for (const m of html.matchAll(pattern)) {
-    urls.add(m[1].startsWith("http") ? m[1] : `${ORIGIN}${m[1]}`);
+    const url = m[1].startsWith("http") ? m[1] : `${ORIGIN}${m[1]}`;
+    if (seen.has(url)) continue;
+
+    const label = toHalfWidth(m[2]);
+    const parsed = label.match(/^(.+?)([0-9]+|[一二三四五六七八九十]+)丁目$/);
+    if (!parsed) continue;
+
+    const chome = parseChomeNumber(parsed[2]);
+    if (chome === null) continue;
+
+    seen.add(url);
+    links.push({ url, town: parsed[1], chome });
   }
-  return [...urls];
+
+  return links;
+}
+
+/**
+ * 区の住所索引から、丁目ごとの一覧ページを集める。
+ * URL はハッシュ付きで組み立てられないため、ここで拾うしかない。
+ */
+export async function discoverChomeLinks(citySlug: string): Promise<ChomeLink[]> {
+  const html = await fetchHtml(`${ORIGIN}/archive/address/tokyo/${citySlug}/`);
+  return html ? parseChomeLinks(html, citySlug) : [];
 }
 
 /**

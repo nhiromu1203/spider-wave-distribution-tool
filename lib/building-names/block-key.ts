@@ -39,7 +39,7 @@ export function toHalfWidth(value: string): string {
 }
 
 /** 「三丁目」「3丁目」「3」をすべて数値にする */
-function parseChome(raw: string): number | null {
+export function parseChomeNumber(raw: string): number | null {
   const kanji = raw.replace(/[一二三四五六七八九]/g, (c) => KANJI_DIGITS[c] ?? c);
   // 十一丁目 のような表記（10 以上）にも一応対応する
   const tens = raw.match(/^十([一二三四五六七八九])?$/);
@@ -64,7 +64,7 @@ export function parseBlockKey(address: string): BlockKey | null {
     /^(.+?)([0-9]+|[一二三四五六七八九十]+)丁目-?([0-9]+)/,
   );
   if (withChome) {
-    const chome = parseChome(withChome[2]);
+    const chome = parseChomeNumber(withChome[2]);
     if (chome === null) return null;
     return { town: withChome[1], chome, block: Number(withChome[3]) };
   }
