@@ -1,67 +1,63 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
-import { isAreaSyncEnabled } from "../sync-config";
 
 /**
- * 画面表示・リロード・エリア選択で建物が増えないことを守る。
+ * 建物一覧の画面から建物が増えないことを守る。
  *
  * ── 実際に起きたこと ────────────────────────────────────────
  * 「そのエリアに取得元由来（source='data_source'）の建物が 0 件なら
- * 自動で取得する」という作りだった。建物マスタを CSV
- * （source='import'）で作り直すと取得元由来は常に 0 件になるため、
- * 画面を開くたびに OSM から取得して登録され、736 件が 1,108 件へ増えた。
+ * 自動で取得する」という作りだった。件数を数える処理が
+ * source='data_source' だけを数えるため、建物マスタを CSV
+ * （source='import'）で作り直すと常に 0 件になる。
+ * その結果、画面を開くたびに OSM から取得して登録され、
+ * 736 件が 1,108 件へ増えた。
+ *
+ * 取得の経路そのものを外したので、条件分岐ではなく
+ * 「書き込む手段が無いこと」で守る。
  */
 
-const KEY = "BUILDING_AUTO_SYNC";
-let saved: string | undefined;
+async function read(path: string): Promise<string> {
+  const source = await readFile(new URL(path, import.meta.url), "utf8");
+  // 注意書きに反応しないよう、コメントは外して中身だけ見る
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
 
-beforeEach(() => {
-  saved = process.env[KEY];
-  delete (process.env as Record<string, string | undefined>)[KEY];
-});
+describe("エリアの画面は DB を変更しない", () => {
+  it("取得元から取り込む処理を持たない", async () => {
+    const code = await read("../sync.ts");
 
-afterEach(() => {
-  if (saved === undefined) delete (process.env as Record<string, string | undefined>)[KEY];
-  else (process.env as Record<string, string | undefined>)[KEY] = saved;
-});
-
-describe("取得元からの自動登録", () => {
-  it("既定では無効", () => {
-    expect(isAreaSyncEnabled()).toBe(false);
+    expect(code).not.toContain("ingestBuildings");
+    expect(code).not.toContain("fetchByArea");
+    expect(code).not.toContain("data_source");
   });
 
-  it("明示的に指定したときだけ有効", () => {
-    (process.env as Record<string, string | undefined>)[KEY] = "1";
-    expect(isAreaSyncEnabled()).toBe(true);
+  it("Supabase クライアントすら作らない", async () => {
+    const code = await read("../sync.ts");
+
+    expect(code).not.toContain("createClient");
+    expect(code).not.toContain("insert");
+    expect(code).not.toContain("upsert");
   });
 
-  it("1 以外の値では有効にしない", () => {
-    for (const v of ["0", "true", "yes", ""]) {
-      (process.env as Record<string, string | undefined>)[KEY] = v;
-      expect(isAreaSyncEnabled(), v).toBe(false);
-    }
-  });
-});
+  it("画面側に取得を呼ぶ処理が無い", async () => {
+    const code = await read("../../../components/AreaSync.tsx");
 
-describe("止め方", () => {
-  it("サーバー側で断っている（画面だけの制御にしない）", async () => {
-    const source = await readFile(new URL("../sync.ts", import.meta.url), "utf8");
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-
-    // 取得元へ問い合わせる前に判定していること
-    const guard = code.indexOf("isAreaSyncEnabled()");
-    const fetchCall = code.indexOf("source.fetchByArea");
-    expect(guard).toBeGreaterThan(0);
-    expect(guard).toBeLessThan(fetchCall);
-  });
-
-  it("画面から自動実行しない（useEffect で取得を呼ばない）", async () => {
-    const source = await readFile(
-      new URL("../../../components/AreaSync.tsx", import.meta.url),
-      "utf8",
-    );
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-
+    expect(code).not.toContain("syncAreaBuildings");
     expect(code).not.toContain("useEffect");
+    expect(code).not.toContain("onClick");
+  });
+});
+
+describe("建物を作る経路", () => {
+  it("残っているのは CSV 取込と取得元の取り込み処理だけ", async () => {
+    // ingest.ts は建物データ取得の共通処理で、現在の呼び出し元は
+    // 過去配布リスト取込（skipUnmatched で新規作成しない）のみ。
+    const importAction = await read("../../import/actions.ts");
+    expect(importAction).toContain("skipUnmatched: true");
+
+    // AI 調査 CSV だけが建物を新しく作る
+    const aiCsv = await read("../../ai-csv/actions.ts");
+    expect(aiCsv).toContain('.from("buildings")');
+    expect(aiCsv).toContain(".insert(insert)");
   });
 });

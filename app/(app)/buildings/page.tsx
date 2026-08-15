@@ -6,13 +6,11 @@ import { DashboardCounts } from "@/components/DashboardCounts";
 import { Pagination } from "@/components/Pagination";
 import { parseFilters, type RawSearchParams } from "@/lib/buildings/filters";
 import {
-  countSyncedBuildingsInArea,
   fetchAreaOptions,
   fetchBuildings,
   fetchStatusCounts,
 } from "@/lib/buildings/queries";
 import { refreshCsvAreas, resolveBuildingDataSource } from "@/lib/data-sources";
-import { isAreaSyncEnabled } from "@/lib/buildings/sync-config";
 import { isUnitCountAvailable } from "@/lib/data-sources/unit-count";
 
 export const dynamic = "force-dynamic";
@@ -38,15 +36,15 @@ export default async function BuildingsPage({
   // （listAreas() は同期メソッドのため）
   await refreshCsvAreas();
 
-  const [counts, areas, list, areaCount] = await Promise.all([
+  const [counts, areas, list] = await Promise.all([
     fetchStatusCounts(filters),
     fetchAreaOptions(filters.prefecture, filters.city),
     fetchBuildings(filters),
-    countSyncedBuildingsInArea(filters.prefecture, filters.city),
   ]);
 
-  const { active, selected, unavailableReason, selectedId } =
-    resolveBuildingDataSource();
+  // 取得元の情報は「開発用データが混ざっていないか」の注意書きにだけ使う。
+  // 取得そのものはこの画面から行わない。
+  const { active } = resolveBuildingDataSource();
 
   return (
     <div className="space-y-4">
@@ -58,11 +56,6 @@ export default async function BuildingsPage({
         prefecture={filters.prefecture}
         city={filters.city}
         town={filters.town}
-        syncedBuildingCount={areaCount}
-        sourceLabel={active?.label ?? selected?.label ?? null}
-        sourceUnavailableReason={unavailableReason}
-        syncEnabled={isAreaSyncEnabled()}
-        selectedSourceId={selectedId}
       />
 
       {active?.isDevelopment && (
