@@ -485,9 +485,43 @@ export function planAiCsvImport(
 
   const planned: PlannedRow[] = [];
 
+  /**
+   * 照合の内訳を出す。原因調査のときだけ使う。
+   *   AI_CSV_DEBUG=メゾン丸十 npm run dev
+   * のように建物名か住所の一部を指定すると、その行だけlog に出る。
+   */
+  const debugNeedle = process.env.AI_CSV_DEBUG?.trim() || null;
+
   for (const csv of rows) {
     const reasons: string[] = [];
     let matched: CurrentBuilding | null = null;
+
+    const debugThisRow =
+      debugNeedle !== null &&
+      (csv.building_name.includes(debugNeedle) ||
+        csv.address.includes(debugNeedle));
+
+    if (debugThisRow) {
+      const key = blockKeyOf(csv.address);
+      const sameBlock = key ? (byBlock.get(key) ?? []) : [];
+      console.log(
+        "\n[AI_CSV_DEBUG] ------------------------------------------",
+      );
+      console.log(`  CSV 建物名        : ${csv.building_name}`);
+      console.log(`  CSV 住所          : ${csv.address}`);
+      console.log(`  CSV 正規化住所    : ${canonicalAddress(csv.address)}`);
+      console.log(`  CSV 街区キー      : ${key ?? "(取り出せず)"}`);
+      console.log(`  同じ住所のDB件数  : ${(byAddress.get(canonicalAddress(csv.address)) ?? []).length}`);
+      console.log(`  同じ街区のDB件数  : ${sameBlock.length}`);
+      for (const b of sameBlock.slice(0, 5)) {
+        console.log(
+          `    - DB住所=${b.address} / DB正規化=${canonicalAddress(b.address)} / ` +
+            `前方一致=${canonicalAddress(csv.address).startsWith(canonicalAddress(b.address))} / ` +
+            `建物名=${b.building_name}`,
+        );
+      }
+      console.log(`  DB全体の件数      : ${current.length}`);
+    }
     /** 住所では建物を絞りきれず、人の確認が必要 */
     let needsMatchReview = false;
     /** DB に無い建物 */
@@ -558,6 +592,11 @@ export function planAiCsvImport(
 
       if (isNew && allowCreate && !newBuilding) {
         reasons.push("新規登録に必要な情報が足りません。");
+      }
+
+      if (debugThisRow) {
+        console.log(`  最終判定          : ${isNew && allowCreate ? "新規登録" : needsMatchReview ? "要確認" : "照合不可"}`);
+        console.log(`  理由              : ${reasons.join(" / ")}`);
       }
 
       planned.push({
@@ -679,6 +718,12 @@ export function planAiCsvImport(
     else if (needsReview) verdict = "要確認";
     else if (changes.length === 0) verdict = "変更なし";
     else verdict = "更新可能";
+
+    if (debugThisRow) {
+      console.log(`  最終判定          : ${verdict}`);
+      console.log(`  変更予定          : ${changes.map((c) => c.field).join(", ") || "なし"}`);
+      console.log(`  理由              : ${reasons.join(" / ")}`);
+    }
 
     planned.push({
       line: csv.line,
