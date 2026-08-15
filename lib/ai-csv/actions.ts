@@ -152,6 +152,8 @@ export type ApplyResult = {
   /** 新しく登録した件数 */
   created: number;
   failed: number;
+  /** 失敗した理由。握りつぶすと原因が分からなくなる */
+  errors: string[];
 };
 
 /**
@@ -178,6 +180,7 @@ export async function applyAiCsv(
       applied: 0,
       created: 0,
       failed: 0,
+      errors: [],
     };
   }
 
@@ -190,6 +193,7 @@ export async function applyAiCsv(
       applied: 0,
       created: 0,
       failed: 0,
+      errors: [],
     };
   }
 
@@ -210,6 +214,7 @@ export async function applyAiCsv(
       applied: 0,
       created: 0,
       failed: 0,
+      errors: [],
     };
   }
 
@@ -232,12 +237,17 @@ export async function applyAiCsv(
       applied: 0,
       created: 0,
       failed: 0,
+      errors: [],
     };
   }
 
   let applied = 0;
   let created = 0;
   let failed = 0;
+  /** 同じ原因の失敗が並ぶため、種類ごとにまとめる */
+  const failures = new Map<string, number>();
+  const noteFailure = (message: string) =>
+    failures.set(message, (failures.get(message) ?? 0) + 1);
 
   for (const row of targets) {
     const patch = buildPatch(row);
@@ -250,6 +260,7 @@ export async function applyAiCsv(
 
     if (error) {
       failed++;
+      noteFailure(`更新に失敗: ${error.message}`);
       continue;
     }
     applied++;
@@ -274,6 +285,7 @@ export async function applyAiCsv(
     const insert = buildInsert(row);
     if (!insert) {
       failed++;
+      noteFailure("新規登録に必要な情報が足りません。");
       continue;
     }
 
@@ -285,6 +297,7 @@ export async function applyAiCsv(
 
     if (error || !inserted) {
       failed++;
+      noteFailure(`新規登録に失敗: ${error?.message ?? "不明"}`);
       continue;
     }
     created++;
@@ -311,6 +324,10 @@ export async function applyAiCsv(
   revalidatePath("/buildings");
   revalidatePath("/import");
 
+  const errors = [...failures.entries()].map(
+    ([message, count]) => `${message}（${count} 件）`,
+  );
+
   return {
     ok: failed === 0,
     message:
@@ -320,6 +337,7 @@ export async function applyAiCsv(
     applied,
     created,
     failed,
+    errors,
   };
 }
 
@@ -408,6 +426,7 @@ export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> 
       applied: 0,
       created: 0,
       failed: 0,
+      errors: [],
     };
   }
 
@@ -425,6 +444,7 @@ export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> 
       applied: 0,
       created: 0,
       failed: 0,
+      errors: [],
     };
   }
 
@@ -476,5 +496,6 @@ export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> 
     applied: restored,
     created: 0,
     failed,
+    errors: [],
   };
 }

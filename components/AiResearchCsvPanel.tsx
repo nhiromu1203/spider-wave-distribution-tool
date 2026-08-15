@@ -110,7 +110,12 @@ export function AiResearchCsvPanel() {
         overwriteExisting: overwrite,
         allowCreate,
       });
-      setMessage(result.message);
+      // 失敗の理由も出す。件数だけだと原因にたどり着けない
+      setMessage(
+        result.errors.length > 0
+          ? `${result.message}\n${result.errors.join("\n")}`
+          : result.message,
+      );
       setLastBatch(result.batchId);
       setPreview(null);
       setCsvText(null);
@@ -231,7 +236,7 @@ export function AiResearchCsvPanel() {
         CSV をここにドラッグ＆ドロップもできます。
       </div>
 
-      {message && <p className="text-sm">{message}</p>}
+      {message && <p className="whitespace-pre-line text-sm">{message}</p>}
 
       {lastBatch && (
         <div className="flex items-center gap-2 text-sm">
