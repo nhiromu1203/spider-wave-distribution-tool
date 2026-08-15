@@ -1,3 +1,4 @@
+import { AiResearchCsvPanel } from "@/components/AiResearchCsvPanel";
 import { BuildingCsvUploader } from "@/components/BuildingCsvUploader";
 import { ImportWizard } from "@/components/ImportWizard";
 import { DATA_SOURCES, resolveBuildingDataSource } from "@/lib/data-sources";
@@ -28,6 +29,8 @@ export default async function ImportPage() {
       </header>
 
       <ImportWizard />
+
+      <AiResearchCsvPanel />
 
       <section className="card space-y-3 p-4">
         <div>
