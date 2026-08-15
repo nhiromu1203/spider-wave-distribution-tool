@@ -31,15 +31,52 @@ export function AreaSync({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<AreaSyncResult | null>(null);
+  /** 分割取得の進み具合（区画 n / 全 m） */
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
+    null,
+  );
   // 同じエリアに対して自動取得を二重実行しないための番人
   const autoLoadedRef = useRef<string | null>(null);
 
+  /**
+   * 区全体を取り込む。
+   *
+   * 広い区は 1 リクエストの実行時間に収まらないため、サーバー側が
+   * 区画に分けて返す。ここでは終わるまで区画を順に呼び出す。
+   * 直列に呼ぶことで、Overpass API へ同時に負荷をかけない。
+   */
   const run = useCallback(() => {
     if (!prefecture || !city) return;
     startTransition(async () => {
-      const r = await syncAreaBuildings({ prefecture, city, town });
-      setResult(r);
-      if (r.ok) router.refresh();
+      let chunkIndex: number | null = 0;
+      const totals = { available: 0, alreadyDistributed: 0, possibleDuplicate: 0 };
+
+      while (chunkIndex !== null) {
+        const r: AreaSyncResult = await syncAreaBuildings({
+          prefecture,
+          city,
+          town,
+          chunkIndex,
+        });
+
+        totals.available += r.available;
+        totals.alreadyDistributed += r.alreadyDistributed;
+        totals.possibleDuplicate += r.possibleDuplicate;
+
+        // 途中経過を都度見せる。累計は集計した値に差し替える。
+        setResult({ ...r, ...totals });
+        setProgress({
+          done: r.progress.chunkIndex + 1,
+          total: r.progress.chunkTotal,
+        });
+
+        // 失敗したらそこで止める。次の区画へ進むと原因が埋もれるため。
+        if (!r.ok) break;
+
+        chunkIndex = r.progress.nextChunkIndex;
+        // 区画がひとつ終わるごとに一覧へ反映する
+        router.refresh();
+      }
     });
   }, [prefecture, city, town, router]);
 
@@ -97,9 +134,11 @@ export function AreaSync({
         {pending ? "取得中…" : "建物データを再取得"}
       </button>
 
-      {pending && syncedBuildingCount === 0 && (
+      {pending && (
         <span className="text-[var(--text-muted)]">
-          {city} の建物一覧を読み込んでいます…
+          {progress && progress.total > 1
+            ? `${city} を ${progress.total} 区画に分けて取得しています（${progress.done}/${progress.total} 完了）…`
+            : `${city} の建物一覧を読み込んでいます…`}
         </span>
       )}
 

@@ -1,4 +1,5 @@
 import { AreaSync } from "@/components/AreaSync";
+import { NameCompletion } from "@/components/NameCompletion";
 import { BuildingFilterBar } from "@/components/BuildingFilterBar";
 import { BuildingTable } from "@/components/BuildingTable";
 import { DashboardCounts } from "@/components/DashboardCounts";
@@ -75,6 +76,8 @@ export default async function BuildingsPage({
           世帯数が取得できない物件も配布対象から除外していません。
         </p>
       )}
+
+      <NameCompletion prefecture={filters.prefecture} city={filters.city} />
 
       <BuildingTable rows={list.rows} />
 

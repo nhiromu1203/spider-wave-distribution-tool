@@ -21,6 +21,8 @@
  */
 export const TARGET_BUILDING_TAGS = ["apartments", "housing"] as const;
 
+import { toOverpassBbox, type BBox } from "./tiles";
+
 export type OverpassAreaQuery = {
   prefecture: string;
   city: string;
@@ -42,10 +44,17 @@ function quote(value: string): string {
 export function buildBuildingsQuery(
   area: OverpassAreaQuery,
   timeoutSeconds: number,
+  /**
+   * 取得範囲をこの矩形に限定する（分割取得で使う）。
+   * 区の境界（area.ward）との重なりで絞り込むため、
+   * 矩形が隣の区にはみ出していても他区の建物は入らない。
+   */
+  bbox?: BBox | null,
 ): string {
+  const within = bbox ? `(${toOverpassBbox(bbox)})` : "";
   const tags = TARGET_BUILDING_TAGS.map(
-    (tag) => `  way["building"="${tag}"](area.ward);
-  relation["building"="${tag}"](area.ward);`,
+    (tag) => `  way["building"="${tag}"](area.ward)${within};
+  relation["building"="${tag}"](area.ward)${within};`,
   ).join("\n");
 
   return `[out:json][timeout:${timeoutSeconds}];

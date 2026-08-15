@@ -257,6 +257,21 @@ export async function loadPrefectureDataset(
   return dataset;
 }
 
+/**
+ * 市区町村に含まれる街区点を返す。
+ *
+ * 住所補完だけでなく、区の範囲や規模を知るためにも使う。
+ * すでに保存済みのデータを読むだけで、外部への問い合わせは発生しない。
+ */
+export async function getCityBlockPoints(
+  prefectureCode: string,
+  city: string,
+  options: { allowDownload?: boolean } = {},
+): Promise<BlockPoint[]> {
+  const dataset = await loadPrefectureDataset(prefectureCode, options);
+  return dataset.byCity[city] ?? [];
+}
+
 export function getDatasetDirectory(): string {
   return datasetDir();
 }

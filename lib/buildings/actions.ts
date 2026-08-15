@@ -37,11 +37,17 @@ export async function updateBuildingName(
   if (!user) return { ok: false, message: "ログインが必要です。" };
 
   // 比較用の名前も更新する。以後は建物名でも重複判定が効くようになる。
+  //
+  // name_source に manual を立てると、建物名の自動補完がこの行を
+  // 対象から外す。人が確認して入れた名前を機械が上書きしないため、
+  // ここは必ず一緒に更新すること。
   const { error } = await supabase
     .from("buildings")
     .update({
       building_name: name,
       normalized_building_name: normalizeBuildingName(name),
+      name_source: "manual",
+      name_decided_at: new Date().toISOString(),
     })
     .eq("id", buildingId);
 

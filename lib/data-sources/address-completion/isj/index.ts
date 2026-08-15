@@ -183,6 +183,7 @@ export const isjAddressCompletionProvider: AddressCompletionProvider = {
 };
 
 export { ATTRIBUTION, isDatasetCached, loadPrefectureDataset } from "./dataset";
+export { getCityBlockPoints } from "./dataset";
 export { clearDatasetMemoryCache, getDatasetDirectory } from "./dataset";
 
 /** 索引のキャッシュを捨てる（データセット更新時に使う） */

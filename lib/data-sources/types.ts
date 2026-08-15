@@ -76,6 +76,15 @@ export type AreaQuery = {
   city: string;
   /** 未指定の場合は市区町村全体が対象 */
   town?: string | null;
+  /**
+   * 何番目の区画を取得するか（0 始まり）。
+   *
+   * 1 リクエストの実行時間には上限があるため、広い区は区画へ分けて
+   * 複数回に分けて取得する。未指定なら先頭の区画を取得する。
+   * 区画の分け方は区ごとに毎回同じ結果になるため、番号だけを
+   * 引き継げば続きから再開できる。
+   */
+  chunkIndex?: number | null;
 };
 
 /** 取得元が対応しているエリア */
@@ -94,6 +103,13 @@ export type FetchResult = {
   /** 取得元が返した総件数（ページング等で一部のみ取得した場合の参考値） */
   totalAvailable?: number;
   notes?: string[];
+  /** 分割取得の進み具合。分割しない取得元では未設定 */
+  chunk?: {
+    /** 今回取得した区画（0 始まり） */
+    index: number;
+    /** 区画の総数 */
+    total: number;
+  };
 };
 
 export interface BuildingDataSource {

@@ -33,6 +33,9 @@ export type BuildingRow = {
   building_use?: BuildingUseValue;
   building_use_note?: string | null;
   /** migration 0003。住所の出所（source=取得元 / isj=位置参照情報で補完） */
+  /** 建物名の出所。manual は人の入力で、自動補完では上書きしない */
+  name_source?: string | null;
+  name_decided_at?: string | null;
   address_source?: string | null;
   /** migration 0003。住所の粒度（housenumber / block / town） */
   address_precision?: string | null;

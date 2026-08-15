@@ -7,6 +7,8 @@
  */
 
 export type CityMaster = {
+  /** 外部サイトの URL に使うローマ字表記（例: arakawa-city） */
+  slug?: string;
   /** 市区町村名。例「荒川区」 */
   name: string;
   /** 読み。並び替え・検索用 */

@@ -23,6 +23,23 @@ export type AreaSyncResult = {
   /** 開発確認用のダミーデータかどうか */
   isDevelopment: boolean;
   sourceLabel: string | null;
+  /**
+   * 分割取得の進み具合。
+   *
+   * 1 リクエストの実行時間には上限があるため、広い区は区画に分けて
+   * 取得する。呼び出し側は done が false のあいだ nextChunkIndex を
+   * 渡して呼び直すことで、区全体を取り込める。
+   */
+  progress: {
+    /** 今回処理した区画（0 始まり） */
+    chunkIndex: number;
+    /** 区画の総数 */
+    chunkTotal: number;
+    /** 区全体の取り込みが終わったか */
+    done: boolean;
+    /** 次に渡すべき区画番号。done なら null */
+    nextChunkIndex: number | null;
+  };
 };
 
 /**
@@ -38,8 +55,11 @@ export async function syncAreaBuildings(area: {
   prefecture: string;
   city: string;
   town?: string | null;
+  /** 取得する区画。未指定なら先頭から */
+  chunkIndex?: number | null;
 }): Promise<AreaSyncResult> {
   const empty = {
+    progress: { chunkIndex: 0, chunkTotal: 1, done: true, nextChunkIndex: null },
     available: 0,
     alreadyDistributed: 0,
     possibleDuplicate: 0,
@@ -92,13 +112,31 @@ export async function syncAreaBuildings(area: {
       prefecture: area.prefecture,
       city: area.city,
       town: area.town ?? null,
+      chunkIndex: area.chunkIndex ?? 0,
     });
 
+    const chunkIndex = fetched.chunk?.index ?? 0;
+    const chunkTotal = fetched.chunk?.total ?? 1;
+    const done = chunkIndex >= chunkTotal - 1;
+    const progress = {
+      chunkIndex,
+      chunkTotal,
+      done,
+      nextChunkIndex: done ? null : chunkIndex + 1,
+    };
+
     if (fetched.buildings.length === 0) {
+      // 区画によっては 1 件も無いことがある（河川敷・工業地帯など）。
+      // 取得そのものは成功しているため、次の区画へ進める。
       return {
         ok: true,
-        message: `${area.city}${area.town ? ` ${area.town}` : ""} の建物データは取得元にありませんでした。`,
+        message:
+          chunkTotal > 1
+            ? `${area.city} の区画 ${chunkIndex + 1}/${chunkTotal} に対象の建物はありませんでした。`
+            : `${area.city}${area.town ? ` ${area.town}` : ""} の建物データは取得元にありませんでした。`,
         ...empty,
+        progress,
+        notes: fetched.notes ?? [],
         isDevelopment: source.isDevelopment,
         sourceLabel: source.label,
       };
@@ -116,7 +154,11 @@ export async function syncAreaBuildings(area: {
 
     return {
       ok: true,
-      message: `${source.label} から ${fetched.buildings.length} 件を取得しました。`,
+      message:
+        chunkTotal > 1
+          ? `${source.label} から ${fetched.buildings.length} 件を取得しました（区画 ${chunkIndex + 1}/${chunkTotal}）。`
+          : `${source.label} から ${fetched.buildings.length} 件を取得しました。`,
+      progress,
       available,
       alreadyDistributed: summary.counts.already_distributed,
       possibleDuplicate: summary.counts.possible_duplicate,

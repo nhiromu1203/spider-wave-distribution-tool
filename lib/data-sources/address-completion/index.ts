@@ -96,6 +96,7 @@ export async function completeAddresses(
 }
 
 export { isjAddressCompletionProvider, ISJ_PROVIDER_ID } from "./isj";
+export { getCityBlockPoints } from "./isj";
 export { ATTRIBUTION as ISJ_ATTRIBUTION } from "./isj";
 export type {
   AddressCompletionProvider,

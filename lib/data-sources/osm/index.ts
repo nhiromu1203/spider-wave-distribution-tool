@@ -11,8 +11,18 @@
  * ────────────────────────────────────────────────────────────
  */
 
-import { listCities } from "../areas";
-import { completeAddresses, ISJ_ATTRIBUTION } from "../address-completion";
+import { getPrefectureCode, listCities } from "../areas";
+import {
+  completeAddresses,
+  getCityBlockPoints,
+  ISJ_ATTRIBUTION,
+} from "../address-completion";
+import {
+  boundsOf,
+  gridSizeForPointCount,
+  splitIntoTiles,
+  type BBox,
+} from "./tiles";
 import type {
   AreaQuery,
   BuildingDataSource,
@@ -35,6 +45,35 @@ export type OsmFetchSummary = ConversionStats & {
   fromCache: boolean;
   townFiltered: number | null;
 };
+
+/**
+ * 区を何個の区画に分けるかを決め、各区画の範囲を返す。
+ *
+ * 分け方は街区点（位置参照情報）の分布から決まるため、
+ * 同じ区なら毎回まったく同じ結果になる。リクエストをまたいでも
+ * 「何番目の区画か」だけで続きから処理できる。
+ *
+ * 位置参照情報が使えない場合は分割せず、1 回で区全体を取得する
+ * （従来どおりの動作。件数の少ない区では問題にならない）。
+ */
+export async function planAreaTiles(area: {
+  prefecture: string;
+  city: string;
+}): Promise<BBox[] | null> {
+  const prefectureCode = getPrefectureCode(area.prefecture);
+  if (!prefectureCode) return null;
+
+  try {
+    const points = await getCityBlockPoints(prefectureCode, area.city);
+    const bounds = boundsOf(points);
+    if (!bounds) return null;
+
+    return splitIntoTiles(bounds, gridSizeForPointCount(points.length));
+  } catch {
+    // 位置参照情報を用意できない場合は分割しない
+    return null;
+  }
+}
 
 let lastSummary: OsmFetchSummary | null = null;
 
@@ -76,15 +115,27 @@ export const osmBuildingDataSource: BuildingDataSource = {
       );
     }
 
+    // ── 取得範囲を区画に分ける ──────────────────────────────
+    // 1 リクエストの実行時間には上限があるため、区全体を一度に
+    // 取得しない。今回処理する区画だけを Overpass へ問い合わせる。
+    const tiles = await planAreaTiles(area);
+    const total = tiles?.length ?? 1;
+    const index = Math.min(Math.max(area.chunkIndex ?? 0, 0), total - 1);
+    const tile = tiles?.[index] ?? null;
+
     const query = buildBuildingsQuery(
       { prefecture: area.prefecture, city: area.city },
       queryTimeoutSeconds(),
+      tile,
     );
 
     let fetched;
     try {
-      // 取得は区単位。町丁目の絞り込みは取得後に行い、追加リクエストを発生させない。
-      fetched = await fetchOverpass(query, cacheKey(area.prefecture, area.city));
+      // 町丁目の絞り込みは取得後に行い、追加リクエストを発生させない。
+      fetched = await fetchOverpass(
+        query,
+        `${cacheKey(area.prefecture, area.city)}#${index}/${total}`,
+      );
     } catch (error) {
       if (error instanceof OverpassError) throw new Error(error.message);
       throw error;
@@ -141,7 +192,9 @@ export const osmBuildingDataSource: BuildingDataSource = {
     lastSummary = { ...stats, fromCache: fetched.fromCache, townFiltered };
 
     const notes: string[] = [
-      `OSM から ${stats.total} 件取得（${area.prefecture}${area.city}）`,
+      total > 1
+        ? `OSM から ${stats.total} 件取得（${area.prefecture}${area.city} の区画 ${index + 1}/${total}）`
+        : `OSM から ${stats.total} 件取得（${area.prefecture}${area.city}）`,
       `集合住宅として採用 ${stats.accepted} 件`,
       `用途対象外 ${
         stats.rejected.not_multi_dwelling +
@@ -182,7 +235,12 @@ export const osmBuildingDataSource: BuildingDataSource = {
     }
     notes.push("データ出典: © OpenStreetMap contributors（ODbL）");
 
-    return { buildings: result, totalAvailable: result.length, notes };
+    return {
+      buildings: result,
+      totalAvailable: result.length,
+      notes,
+      chunk: { index, total },
+    };
   },
 };
 
