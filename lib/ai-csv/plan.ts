@@ -485,6 +485,18 @@ export function planAiCsvImport(
 
   const planned: PlannedRow[] = [];
 
+  /** 住所がどこまで一致したかの内訳。なぜその判定になったかを数で示す */
+  const stats = {
+    id照合: 0,
+    住所完全一致_1件: 0,
+    住所完全一致_複数: 0,
+    街区一致_前方一致1件: 0,
+    街区一致_前方一致複数: 0,
+    街区一致_前方一致なし: 0,
+    街区にDBなし: 0,
+    住所を読めない: 0,
+  };
+
   /**
    * 照合の内訳を出す。原因調査のときだけ使う。
    *   AI_CSV_DEBUG=メゾン丸十 npm run dev
@@ -514,10 +526,14 @@ export function planAiCsvImport(
       console.log(`  同じ住所のDB件数  : ${(byAddress.get(canonicalAddress(csv.address)) ?? []).length}`);
       console.log(`  同じ街区のDB件数  : ${sameBlock.length}`);
       for (const b of sameBlock.slice(0, 5)) {
+        const csvName = normalizeBuildingName(csv.building_name);
+        const dbName = normalizeBuildingName(b.building_name ?? "");
         console.log(
-          `    - DB住所=${b.address} / DB正規化=${canonicalAddress(b.address)} / ` +
-            `前方一致=${canonicalAddress(csv.address).startsWith(canonicalAddress(b.address))} / ` +
-            `建物名=${b.building_name}`,
+          `    - DB住所=${b.address}\n` +
+            `      DB正規化=${canonicalAddress(b.address)}\n` +
+            `      前方一致=${canonicalAddress(csv.address).startsWith(canonicalAddress(b.address))}` +
+            ` / 建物名一致=${csvName !== "" && csvName === dbName}` +
+            ` / DB建物名=${b.building_name}`,
         );
       }
       console.log(`  DB全体の件数      : ${current.length}`);
@@ -530,6 +546,7 @@ export function planAiCsvImport(
     // ── 突き合わせ ────────────────────────────────────────
     if (csv.building_id) {
       matched = byId.get(csv.building_id) ?? null;
+      if (matched) stats.id照合++;
       if (!matched) reasons.push(`building_id が見つかりません（${csv.building_id}）。`);
     } else if (csv.address) {
       const csvCanonical = canonicalAddress(csv.address);
@@ -537,9 +554,11 @@ export function planAiCsvImport(
 
       if (exact.length === 1) {
         // ① 正規化住所で完全一致し、1 件だけ
+        stats.住所完全一致_1件++;
         matched = exact[0];
         reasons.push("住所の完全一致で照合しました。");
       } else if (exact.length > 1) {
+        stats.住所完全一致_複数++;
         // ② 同じ住所に複数ある場合は建物名で絞る
         const sameName = narrowByName(exact, csv.building_name);
         if (sameName.length === 1) {
@@ -562,11 +581,13 @@ export function planAiCsvImport(
         );
 
         if (inBlock.length === 1) {
+          stats.街区一致_前方一致1件++;
           matched = inBlock[0];
           reasons.push(
             `号まで一致する建物が無いため、街区（${block}）で照合しました。`,
           );
         } else if (inBlock.length > 1) {
+          stats.街区一致_前方一致複数++;
           const sameName = narrowByName(inBlock, csv.building_name);
           if (sameName.length === 1) {
             matched = sameName[0];
@@ -578,9 +599,20 @@ export function planAiCsvImport(
             );
           }
         } else {
+          // 街区に DB の建物が居るのに前方一致しなかったのか、
+          // そもそも街区に居ないのかを分けて数える
+          const sameBlockAll = block ? (byBlock.get(block) ?? []) : [];
+          if (!block) stats.住所を読めない++;
+          else if (sameBlockAll.length > 0) stats.街区一致_前方一致なし++;
+          else stats.街区にDBなし++;
+
           // DB に無い建物。新しく登録する候補にする
           isNew = true;
-          reasons.push("DB に該当する建物がないため、新規登録の候補です。");
+          reasons.push(
+            sameBlockAll.length > 0
+              ? `街区（${block}）に ${sameBlockAll.length} 件あるが、住所の並びが一致しませんでした。`
+              : "DB に該当する建物がないため、新規登録の候補です。",
+          );
         }
       }
     } else {
@@ -734,6 +766,15 @@ export function planAiCsvImport(
       reasons,
       csv,
     });
+  }
+
+  if (debugNeedle !== null) {
+    console.log("\n[AI_CSV_DEBUG] === 住所がどこまで一致したかの内訳 ===");
+    console.log(`  CSV 行数            : ${rows.length}`);
+    console.log(`  DB 読み込み件数     : ${current.length}`);
+    for (const [k, v] of Object.entries(stats)) {
+      console.log(`  ${k.replace(/_/g, " ").padEnd(22)}: ${v}`);
+    }
   }
 
   const counts = {
