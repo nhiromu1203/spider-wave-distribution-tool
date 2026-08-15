@@ -308,6 +308,10 @@ export function parsePropertyType(
 function canonicalAddress(address: string): string {
   return address
     .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    // 都道府県は書かれたり省略されたりする。付けたまま比べると
+    // 「東京都荒川区…」と「荒川区…」が別物になってしまうため、必ず落とす。
+    // 市区町村は残す。落とすと別の区の同じ町名と混ざる。
+    .replace(/^(東京都|北海道|京都府|大阪府|.{2,3}県)/, "")
     .replace(/([一二三四五六七八九十]+)丁目/g, (_, kanji: string) => {
       const n = parseChomeNumber(kanji);
       return n === null ? `${kanji}丁目` : `${n}丁目`;

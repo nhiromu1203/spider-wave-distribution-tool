@@ -22,6 +22,13 @@ const KANJI_DIGITS: Record<string, string> = {
 };
 
 export type BlockKey = {
+  /**
+   * 市区町村（例: 荒川区）。分からなければ空。
+   *
+   * 23区には同じ町名が複数の区に存在する（中央・本町・栄町など）。
+   * 町名だけで街区を表すと別の区の建物と混ざるため、必ず含める。
+   */
+  city: string;
   /** 町名（丁目を除く。例: 東日暮里） */
   town: string;
   /** 丁目 */
@@ -55,9 +62,19 @@ export function parseChomeNumber(raw: string): number | null {
  * （こちらの住所には号が無いことが多いため）。
  */
 export function parseBlockKey(address: string): BlockKey | null {
-  const normalized = toHalfWidth(address)
-    .replace(/^東京都/, "")
-    .replace(/^[^市区町村]+[市区町村]/, (m) => (m.endsWith("区") ? "" : m));
+  // 都道府県は書かれたり省略されたりするので必ず落とす
+  const withoutPrefecture = toHalfWidth(address).replace(
+    /^(東京都|北海道|京都府|大阪府|.{2,3}県)/,
+    "",
+  );
+
+  // 市区町村は切り出して鍵に含める。町名の先頭に「町」が来る場合
+  // （町屋など）は直前に別の文字が要る指定なので、誤って削らない。
+  const cityMatch = withoutPrefecture.match(/^([^市区町村]+[市区町村])/);
+  const city = cityMatch?.[1] ?? "";
+  const normalized = cityMatch
+    ? withoutPrefecture.slice(cityMatch[1].length)
+    : withoutPrefecture;
 
   // 町名 + 丁目 + 番
   const withChome = normalized.match(
@@ -66,13 +83,14 @@ export function parseBlockKey(address: string): BlockKey | null {
   if (withChome) {
     const chome = parseChomeNumber(withChome[2]);
     if (chome === null) return null;
-    return { town: withChome[1], chome, block: Number(withChome[3]) };
+    return { city, town: withChome[1], chome, block: Number(withChome[3]) };
   }
 
   // 町名 + ハイフン区切り（東日暮里3-12-5）
   const hyphen = normalized.match(/^(.+?)([0-9]+)-([0-9]+)/);
   if (hyphen) {
     return {
+      city,
       town: hyphen[1],
       chome: Number(hyphen[2]),
       block: Number(hyphen[3]),
@@ -84,7 +102,7 @@ export function parseBlockKey(address: string): BlockKey | null {
 
 /** 同じ街区かどうかを比べるための文字列 */
 export function blockKeyToString(key: BlockKey): string {
-  return `${key.town}/${key.chome}/${key.block}`;
+  return `${key.city}/${key.town}/${key.chome}/${key.block}`;
 }
 
 /** 住所をそのまま街区文字列にする。取り出せなければ null */

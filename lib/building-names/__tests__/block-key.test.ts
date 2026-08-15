@@ -12,6 +12,7 @@ describe("表記ゆれを吸収する", () => {
 describe("住所から街区を取り出す", () => {
   it("漢数字の丁目に対応する", () => {
     expect(parseBlockKey("東京都荒川区東日暮里三丁目12")).toEqual({
+      city: "荒川区",
       town: "東日暮里",
       chome: 3,
       block: 12,
@@ -20,6 +21,7 @@ describe("住所から街区を取り出す", () => {
 
   it("算用数字の丁目に対応する", () => {
     expect(parseBlockKey("荒川区東日暮里3丁目12-5")).toEqual({
+      city: "荒川区",
       town: "東日暮里",
       chome: 3,
       block: 12,
@@ -28,6 +30,7 @@ describe("住所から街区を取り出す", () => {
 
   it("ハイフン区切りに対応する", () => {
     expect(parseBlockKey("東京都荒川区東日暮里3-12-5")).toEqual({
+      city: "荒川区",
       town: "東日暮里",
       chome: 3,
       block: 12,
@@ -102,5 +105,29 @@ describe("一覧ページの読み取り", () => {
 
   it("建物リンクが無ければ空", () => {
     expect(parseListPage("<html><body>該当なし</body></html>")).toEqual([]);
+  });
+});
+
+describe("市区町村・都道府県の除去", () => {
+  it("区・市・町・村のいずれでも街区を取り出せる", () => {
+    expect(blockKeyOf("東京都荒川区東日暮里3-12")).toBe("荒川区/東日暮里/3/12");
+    expect(blockKeyOf("神奈川県横浜市西日暮里2-26")).toBe("横浜市/西日暮里/2/26");
+    expect(blockKeyOf("埼玉県三芳町上富1-2")).toBe("三芳町/上富/1/2");
+  });
+
+  it("都道府県の有無で結果が変わらない", () => {
+    expect(blockKeyOf("東京都荒川区東日暮里3-12")).toBe(
+      blockKeyOf("荒川区東日暮里3-12"),
+    );
+  });
+
+  it("町名の先頭が「町」でも削らない（町屋）", () => {
+    expect(blockKeyOf("東京都荒川区町屋1-2")).toBe("荒川区/町屋/1/2");
+  });
+
+  it("市区町村が違えば別の街区として扱う", () => {
+    expect(blockKeyOf("荒川区東日暮里3-12")).not.toBe(
+      blockKeyOf("足立区東日暮里3-12"),
+    );
   });
 });

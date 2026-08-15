@@ -661,3 +661,53 @@ describe("漢数字の丁目", () => {
     expect(plan.rows[0].verdict).toBe("更新可能");
   });
 });
+
+describe("都道府県の有無", () => {
+  /**
+   * 実データで発覚した不具合。
+   * 調査結果は「荒川区西日暮里2丁目26番10号」のように都道府県を
+   * 省いて書かれることが多いのに対し、DB の住所は「東京都…」で始まる。
+   * 都道府県を付けたまま比べていたため、既存建物が 1 件も見つからず、
+   * すべて新規登録として扱われていた。
+   */
+  const target = building({ address: "東京都荒川区西日暮里二丁目26" });
+
+  function verdictFor(address: string) {
+    const { rows } = parseAiCsv(
+      csv(row({ building_id: "", building_name: "メゾン丸十", address })),
+    );
+    return planAiCsvImport(rows, [target], { allowCreate: true }).rows[0].verdict;
+  }
+
+  it("都道府県が省かれていても同じ建物として照合する", () => {
+    expect(verdictFor("荒川区西日暮里2丁目26番10号")).toBe("更新可能");
+    expect(verdictFor("荒川区西日暮里2-26-10")).toBe("更新可能");
+  });
+
+  it("都道府県が書かれていても照合する", () => {
+    expect(verdictFor("東京都荒川区西日暮里2丁目26番10号")).toBe("更新可能");
+    expect(verdictFor("東京都荒川区西日暮里２丁目２６番１０号")).toBe("更新可能");
+  });
+
+  it("市区町村は落とさない（別の区の同じ町名と混ざらない）", () => {
+    // 市区町村まで落とすと、別の区の同名の町を同じ建物にしてしまう
+    expect(verdictFor("足立区西日暮里2丁目26番10号")).toBe("新規登録");
+    expect(verdictFor("北区西日暮里2-26-10")).toBe("新規登録");
+  });
+
+  it("県・府・道の表記も落とせる", () => {
+    const kanagawa = building({ address: "神奈川県横浜市西日暮里二丁目26" });
+    const { rows } = parseAiCsv(
+      csv(
+        row({
+          building_id: "",
+          building_name: "テスト",
+          address: "横浜市西日暮里2-26-10",
+        }),
+      ),
+    );
+    expect(
+      planAiCsvImport(rows, [kanagawa], { allowCreate: true }).rows[0].verdict,
+    ).toBe("更新可能");
+  });
+});
