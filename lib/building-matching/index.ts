@@ -42,3 +42,5 @@ export {
 } from "./matchBuilding";
 
 export { LEXICON, type LexiconEntry } from "./dictionaries";
+
+export { detectScript, isScriptVariant } from "./scriptVariant";

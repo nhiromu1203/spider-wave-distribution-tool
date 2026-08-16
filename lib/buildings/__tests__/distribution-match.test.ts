@@ -210,3 +210,40 @@ describe("照合に使えない行", () => {
     expect(history).toHaveLength(1);
   });
 });
+
+describe("住所一致 + 文字種違い（日本語表記と英語表記など）", () => {
+  const existing = building(
+    "グランドメゾン中野",
+    "東京都中野区中央1丁目2番3号",
+    "グランドメゾン中野",
+  );
+
+  it("住所が一致していれば、英語表記でも配布済みにする", async () => {
+    const { history } = await ingest(
+      [existing],
+      distributionRow("東京都中野区中央1丁目2番3号", "GRAND MAISON NAKANO"),
+    );
+
+    expect(history).toHaveLength(1);
+    expect(history[0].building_id).toBe("グランドメゾン中野");
+  });
+
+  it("住所が違えば、英語表記が似ていても配布済みにしない", async () => {
+    const { history } = await ingest(
+      [existing],
+      distributionRow("東京都中野区中央9丁目9番9号", "GRAND MAISON NAKANO"),
+    );
+
+    expect(history).toHaveLength(0);
+  });
+
+  it("住所が違い、名前も同じ文字種で似ているだけなら配布済みにしない", async () => {
+    // 実測 0.950 と高いが、別の建物
+    const { history } = await ingest(
+      [existing],
+      distributionRow("東京都中野区中央9丁目9番9号", "グランドメゾン新宿"),
+    );
+
+    expect(history).toHaveLength(0);
+  });
+});

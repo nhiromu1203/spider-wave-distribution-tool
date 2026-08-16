@@ -5,6 +5,7 @@ import {
   calculateNameSimilarity,
   distanceInMeters,
   matchBuilding,
+  isScriptVariant,
   normalizeAddressDetailed,
   normalizeBuildingNameDetailed,
   parseAddressParts,
@@ -773,8 +774,18 @@ export async function ingestBuildings(
         ? (byName.get(row.normalizedName) ?? [])
         : [];
 
+      // 3. 住所が一致していて、建物名が文字種違い（日本語表記と英語表記など）
+      //    同じ住所であることが前提。住所が違えば名前が似ていても別の建物。
+      const scriptVariant =
+        sameAddress.length > 0 && input.building_name
+          ? (sameAddress.find((b) =>
+              isScriptVariant(b.building_name, input.building_name as string),
+            ) ?? null)
+          : null;
+
       let target =
         sameAddress.find((b) => b.normalized_building_name === row.normalizedName) ??
+        scriptVariant ??
         sameAddress[0] ??
         sameName[0] ??
         null;
