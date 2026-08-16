@@ -197,12 +197,17 @@ type PreparedRow = {
 
 function prepare(input: BuildingInput): PreparedRow | null {
   const address = (input.address ?? "").trim();
-  if (!address) return null;
-
   const addr = normalizeAddressDetailed(address);
-  if (!addr.normalized) return null;
-
   const name = normalizeBuildingNameDetailed(input.building_name);
+
+  // 過去配布リストは「住所か建物名のどちらかが一致すれば配布済み」で照合する。
+  // そのため住所が無くても、建物名があれば照合に使える。
+  // 両方とも空の行は照合のしようがないので、ここで捨てる。
+  const canMatchByName = input.distribution !== undefined && name.normalized !== "";
+
+  if (!address || !addr.normalized) {
+    if (!canMatchByName) return null;
+  }
   const parts = parseAddressParts(address);
 
   // 建物名が不明な建物は、比較用の名前に取得元の識別子を混ぜて別物として扱う。
@@ -243,6 +248,8 @@ async function loadComparisonSet(
   rows: PreparedRow[],
 ): Promise<{
   byAddress: Map<string, BuildingRow[]>;
+  /** 正規化した建物名で引く。過去配布リストの照合に使う */
+  byName: Map<string, BuildingRow[]>;
   bySourceRef: Map<string, BuildingRow>;
   nearby: BuildingRow[];
   distributed: BuildingRow[];
@@ -254,7 +261,17 @@ async function loadComparisonSet(
   ];
 
   const byAddress = new Map<string, BuildingRow[]>();
+  const byName = new Map<string, BuildingRow[]>();
   const bySourceRef = new Map<string, BuildingRow>();
+
+  /** 建物名で引けるように控えておく。空の名前は鍵にしない */
+  const registerName = (row: BuildingRow) => {
+    const key = row.normalized_building_name;
+    if (!key) return;
+    const list = byName.get(key) ?? [];
+    if (!list.some((b) => b.id === row.id)) list.push(row);
+    byName.set(key, list);
+  };
   const nearbyMap = new Map<string, BuildingRow>();
   const distributedMap = new Map<string, BuildingRow>();
 
@@ -276,6 +293,32 @@ async function loadComparisonSet(
       const list = byAddress.get(row.normalized_address) ?? [];
       list.push(row);
       byAddress.set(row.normalized_address, list);
+      registerName(row);
+      if (row.distribution_count > 0) distributedMap.set(row.id, row);
+    }
+  }
+
+  // ── 建物名でも引けるようにする ──────────────────────────
+  // 過去配布リストは住所の書き方が揃っていないことが多い。
+  // 住所が一致しなくても、建物名が一致すれば同じ物件として扱う。
+  const names = [
+    ...new Set(rows.map((r) => r.normalizedName).filter((n) => n.length > 0)),
+  ];
+  for (const chunk of chunkForInFilter(names)) {
+    const rows2 = await runQuery<BuildingRow[]>(
+      "既存物件の照合（建物名）",
+      {
+        table: "buildings",
+        filter: "normalized_building_name in (...)",
+        件数: chunk.length,
+        絞り込みバイト数: filterBytes(chunk),
+        先頭: chunk[0],
+      },
+      () =>
+        supabase.from("buildings").select("*").in("normalized_building_name", chunk),
+    );
+    for (const row of rows2) {
+      registerName(row);
       if (row.distribution_count > 0) distributedMap.set(row.id, row);
     }
   }
@@ -333,6 +376,7 @@ async function loadComparisonSet(
 
   return {
     byAddress,
+    byName,
     bySourceRef,
     nearby: [...nearbyMap.values()],
     distributed: [...distributedMap.values()],
@@ -545,10 +589,8 @@ export async function analyzeBuildings(
     return { results, counts, excludedAsUnknownUse, nearMisses };
   }
 
-  const { byAddress, bySourceRef, nearby, distributed } = await loadComparisonSet(
-    supabase,
-    prepared,
-  );
+  const { byAddress, byName, bySourceRef, nearby, distributed } =
+    await loadComparisonSet(supabase, prepared);
 
   for (const row of prepared) {
     const { input } = row;
@@ -710,10 +752,8 @@ export async function ingestBuildings(
     return { results, counts, excludedAsUnknownUse, nearMisses };
   }
 
-  const { byAddress, bySourceRef, nearby, distributed } = await loadComparisonSet(
-    supabase,
-    prepared,
-  );
+  const { byAddress, byName, bySourceRef, nearby, distributed } =
+    await loadComparisonSet(supabase, prepared);
 
   for (const row of prepared) {
     const { input } = row;
@@ -721,10 +761,22 @@ export async function ingestBuildings(
 
     // ── 過去配布済みリストの取込 ────────────────────────────
     if (input.distribution) {
-      // 住所一致を最優先。建物名が違っても同一物件として履歴を紐付ける。
+      // ── 配布済みとみなす条件 ──────────────────────────────
+      // 「住所が一致」または「建物名が一致」のどちらかで同じ物件とみなす。
+      // 過去配布リストは住所の書き方も建物名の書き方も揃っていないため、
+      // 片方だけが一致することがよくある。
+      //
+      // 住所と建物名の両方が一致するものを最優先し、次に住所、
+      // 最後に建物名の順で選ぶ。建物名は正規化したうえでの完全一致で、
+      // 部分一致は使わない（別の建物を巻き込むため）。
+      const sameName = row.normalizedName
+        ? (byName.get(row.normalizedName) ?? [])
+        : [];
+
       let target =
         sameAddress.find((b) => b.normalized_building_name === row.normalizedName) ??
         sameAddress[0] ??
+        sameName[0] ??
         null;
 
       if (!target) {
@@ -735,7 +787,7 @@ export async function ingestBuildings(
             outcome: "skipped",
             buildingId: null,
             message:
-              "住所が一致する建物が見つかりませんでした（新しい建物は作成しません）。",
+              "住所も建物名も一致する建物が見つかりませんでした（新しい建物は作成しません）。",
           });
           counts.skipped++;
           continue;
@@ -775,7 +827,8 @@ export async function ingestBuildings(
         continue;
       }
 
-      const outcome: IngestOutcome = sameAddress.length > 0 ? "merged" : "inserted";
+      const outcome: IngestOutcome =
+        sameAddress.length > 0 || sameName.length > 0 ? "merged" : "inserted";
       results.push({
         input,
         outcome,
