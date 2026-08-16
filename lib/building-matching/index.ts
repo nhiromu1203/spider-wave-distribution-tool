@@ -43,4 +43,3 @@ export {
 
 export { LEXICON, type LexiconEntry } from "./dictionaries";
 
-export { detectScript, isScriptVariant } from "./scriptVariant";

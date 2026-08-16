@@ -211,7 +211,16 @@ describe("照合に使えない行", () => {
   });
 });
 
-describe("住所一致 + 文字種違い（日本語表記と英語表記など）", () => {
+describe("日本語表記と英語表記など、文字種が違う建物名", () => {
+  /**
+   * 住所が一致していれば、建物名を見ずに配布済みになる。
+   * 名前の似ている度合いは一切見ない。
+   *
+   * 似ている度合いで判定すると、実測で
+   *   グランドメゾン中野 / GRAND MAISON NAKANO   0.854（同じ建物）
+   *   グランドメゾン中野 / グランドメゾン新宿     0.950（別の建物）
+   * のように、別の建物のほうが高く出るため必ず巻き込む。
+   */
   const existing = building(
     "グランドメゾン中野",
     "東京都中野区中央1丁目2番3号",
@@ -237,13 +246,47 @@ describe("住所一致 + 文字種違い（日本語表記と英語表記など�
     expect(history).toHaveLength(0);
   });
 
-  it("住所が違い、名前も同じ文字種で似ているだけなら配布済みにしない", async () => {
-    // 実測 0.950 と高いが、別の建物
+  it("住所が違えば、名前がかなり似ていても配布済みにしない", async () => {
+    // 実測 0.950。しきい値による判定なら誤って除外される組み合わせ
     const { history } = await ingest(
       [existing],
       distributionRow("東京都中野区中央9丁目9番9号", "グランドメゾン新宿"),
     );
 
     expect(history).toHaveLength(0);
+  });
+
+  it("住所が違えば、別棟の表記差でも配布済みにしない", async () => {
+    // 実測 0.947
+    const tower = building(
+      "コスモステージ荒川遊園 S棟",
+      "東京都荒川区西尾久6丁目1番1号",
+      "S棟",
+    );
+    const { history } = await ingest(
+      [tower],
+      distributionRow("東京都荒川区西尾久9丁目9番9号", "コスモステージ荒川遊園 N棟"),
+    );
+
+    expect(history).toHaveLength(0);
+  });
+});
+
+describe("配布判定に類似度を使っていない", () => {
+  it("過去配布の照合部分に類似度・しきい値が無い", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../ingest.ts", import.meta.url), "utf8");
+
+    // 過去配布リストの照合ブランチだけを取り出す
+    const start = source.indexOf("// ── 過去配布済みリストの取込");
+    const end = source.indexOf("distribution_history", start);
+    const branch = source
+      .slice(start, end)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+
+    expect(branch).not.toContain("Similarity");
+    expect(branch).not.toContain("isScriptVariant");
+    expect(branch).not.toMatch(/0\.\d+/);
   });
 });
