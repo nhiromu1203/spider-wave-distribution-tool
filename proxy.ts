@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { readSupabaseEnv } from "@/lib/supabase/env";
+import { decideAccess, providerOf } from "@/lib/auth/access";
 
 const PUBLIC_PATHS = ["/login", "/setup", "/auth"];
 
@@ -46,6 +47,28 @@ export async function proxy(request: NextRequest) {
     user = data.user;
   } catch {
     user = null;
+  }
+
+  // ── 使ってよいアカウントかを毎回確かめる ──────────────────
+  // ログインできること自体は誰でもできる。どのアカウントかは
+  // 認証後の user.email でしか分からないため、保護ページを開くたびに見る。
+  // 画面から隠すだけでは防御にならない。
+  if (user) {
+    const decision = decideAccess(user.email, providerOf(user));
+    if (!decision.allowed) {
+      // 権限の無いセッションは残さない
+      await supabase.auth.signOut();
+
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      url.search = `?error=${encodeURIComponent(decision.reason)}`;
+
+      const denied = NextResponse.redirect(url);
+      for (const cookie of response.cookies.getAll()) {
+        denied.cookies.set(cookie.name, "", { ...cookie, maxAge: 0 });
+      }
+      return denied;
+    }
   }
 
   const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
