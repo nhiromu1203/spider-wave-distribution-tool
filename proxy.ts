@@ -1,93 +1,33 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { readSupabaseEnv } from "@/lib/supabase/env";
-import { decideAccess, providerOf } from "@/lib/auth/access";
-
-const PUBLIC_PATHS = ["/login", "/setup", "/auth"];
 
 /**
- * セッション Cookie の更新と、未ログインユーザーの遮断。
- * ログインしていないユーザーは建物情報・配布履歴に到達できない。
+ * ログインを求めず、接続情報だけを確かめる。
+ *
+ * ── ログインを外した経緯 ────────────────────────────────────
+ * 社内で使うツールで、利用者ごとの権限差が無いため、毎回ログインを
+ * 求める意味が薄かった。現在はログイン画面を出さず、そのまま業務画面を
+ * 使えるようにしてある。
+ *
+ * ── そのぶんの守り方 ────────────────────────────────────────
+ * DB へは必ずサーバー側から触り、その際にブラウザへ渡らない鍵
+ * （SUPABASE_SERVICE_ROLE_KEY）を使う。公開鍵で DB を直接叩かれても
+ * 何もできないよう、DB 側の権限は authenticated のままにしてある。
+ * lib/supabase/env.ts と lib/supabase/server.ts を参照。
+ * ────────────────────────────────────────────────────────────
  */
 export async function proxy(request: NextRequest) {
-  const env = readSupabaseEnv();
   const { pathname } = request.nextUrl;
 
-  // Supabase 未設定時はセットアップ案内へ誘導する
-  if (!env) {
+  // 接続情報が無いままでは何も表示できないので、設定手順へ案内する
+  if (!readSupabaseEnv()) {
     if (pathname === "/setup") return NextResponse.next();
     const url = request.nextUrl.clone();
     url.pathname = "/setup";
     return NextResponse.redirect(url);
   }
 
-  let response = NextResponse.next({ request });
-
-  const supabase = createServerClient(env.url, env.anonKey, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet) {
-        for (const { name, value } of cookiesToSet) {
-          request.cookies.set(name, value);
-        }
-        response = NextResponse.next({ request });
-        for (const { name, value, options } of cookiesToSet) {
-          response.cookies.set(name, value, options);
-        }
-      },
-    },
-  });
-
-  // Supabase に到達できない場合も未ログイン扱いにする（保護側に倒す）
-  let user = null;
-  try {
-    const { data } = await supabase.auth.getUser();
-    user = data.user;
-  } catch {
-    user = null;
-  }
-
-  // ── 使ってよいアカウントかを毎回確かめる ──────────────────
-  // ログインできること自体は誰でもできる。どのアカウントかは
-  // 認証後の user.email でしか分からないため、保護ページを開くたびに見る。
-  // 画面から隠すだけでは防御にならない。
-  if (user) {
-    const decision = decideAccess(user.email, providerOf(user));
-    if (!decision.allowed) {
-      // 権限の無いセッションは残さない
-      await supabase.auth.signOut();
-
-      const url = request.nextUrl.clone();
-      url.pathname = "/login";
-      url.search = `?error=${encodeURIComponent(decision.reason)}`;
-
-      const denied = NextResponse.redirect(url);
-      for (const cookie of response.cookies.getAll()) {
-        denied.cookies.set(cookie.name, "", { ...cookie, maxAge: 0 });
-      }
-      return denied;
-    }
-  }
-
-  const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
-
-  if (!user && !isPublic) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
-  }
-
-  if (user && pathname === "/login") {
-    const url = request.nextUrl.clone();
-    url.pathname = "/buildings";
-    url.search = "";
-    return NextResponse.redirect(url);
-  }
-
-  return response;
+  return NextResponse.next({ request });
 }
 
 export const config = {

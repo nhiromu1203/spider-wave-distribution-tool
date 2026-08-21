@@ -70,12 +70,6 @@ export async function previewImport(
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { ok: false, message: "ログインが必要です。", counts: empty, samples: [] };
-  }
 
   try {
     const summary = await analyzeBuildings(supabase, inputs);
@@ -104,12 +98,6 @@ export async function runImport(
   if (!preview.ok) return { ...preview, batchId: null };
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { ...preview, ok: false, message: "ログインが必要です。", batchId: null };
-  }
 
   try {
     const summary = await ingestBuildings(supabase, inputs, {
@@ -117,7 +105,7 @@ export async function runImport(
       // 過去配布リストは配布実績の記録であり、建物マスタではない。
       // 住所が一致する建物が無い行で新しい建物を作らない。
       skipUnmatched: true,
-      userId: user.id,
+      userId: null,
     });
 
     // 先にエリアの建物を取得していた場合、その一覧側にも配布済み判定を反映させる。
@@ -139,7 +127,7 @@ export async function runImport(
           summary.counts.possible_duplicate + summary.counts.already_distributed,
         skipped_rows: summary.counts.skipped,
         column_mapping: meta.mapping,
-        created_by: user.id,
+        created_by: null,
       })
       .select("id")
       .single();

@@ -161,6 +161,26 @@ function applySort<T>(query: T, sort: BuildingFilters["sort"]): T {
   }
 }
 
+/**
+ * 問い合わせの失敗を、次に何をすればよいか分かる文にする。
+ *
+ * ログインを不要にしたため、DB へはサーバー側の鍵で触る必要がある。
+ * 鍵が未設定だと「permission denied」しか出ず、原因にたどり着けない。
+ */
+export function describeQueryError(label: string, message: string): string {
+  if (/permission denied/i.test(message)) {
+    return (
+      `${label}に失敗しました: ${message}\n` +
+      "DB へアクセスする権限がありません。ログインを不要にしたため、" +
+      "サーバー側の鍵（SUPABASE_SERVICE_ROLE_KEY）の設定が必要です。" +
+      "Supabase の Project Settings > API Keys にある service_role の値を、" +
+      "ローカルは .env.local、本番は Vercel の Environment Variables に設定してください。" +
+      "（NEXT_PUBLIC_ は付けないでください。付けるとブラウザへ露出します）"
+    );
+  }
+  return `${label}に失敗しました: ${message}`;
+}
+
 export type BuildingListResult = {
   rows: BuildingListRow[];
   total: number;
@@ -188,7 +208,7 @@ export async function fetchBuildings(
   const from = (filters.page - 1) * PAGE_SIZE;
   const { data, error, count } = await query.range(from, from + PAGE_SIZE - 1);
 
-  if (error) throw new Error(`建物一覧の取得に失敗しました: ${error.message}`);
+  if (error) throw new Error(describeQueryError("建物一覧の取得", error.message));
 
   const total = count ?? 0;
   const rows = await withPendingDuplicateCounts(

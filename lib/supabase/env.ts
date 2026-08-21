@@ -141,3 +141,31 @@ export function requireSupabaseEnv(): SupabaseEnv {
 }
 
 export const isSupabaseConfigured = () => readSupabaseEnv() !== null;
+
+/**
+ * サーバー側だけで使う秘密鍵（service_role）。
+ *
+ * ── なぜ必要か ──────────────────────────────────────────────
+ * ログインを不要にしたため、ブラウザから来る利用者は誰も認証されない。
+ * DB の権限は authenticated に対して与えてあるので、そのままでは
+ * 一覧の取得も CSV 取込も権限不足で失敗する。
+ *
+ * かといって anon に読み書きを開けると、URL さえ分かれば誰でも
+ * DB を直接叩けてしまう。そこで DB へは必ずサーバー側から触り、
+ * その際にこの鍵を使う。鍵はブラウザへ送られない。
+ *
+ * ── 扱いの注意 ──────────────────────────────────────────────
+ * この鍵は RLS を迂回する。NEXT_PUBLIC_ を付けてはいけない。
+ * 付けるとビルド時にブラウザ向けのコードへ埋め込まれ、公開される。
+ * ────────────────────────────────────────────────────────────
+ */
+export function readServiceRoleKey(): string | null {
+  const raw = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = sanitizeEnvValue(raw, "SUPABASE_SERVICE_ROLE_KEY");
+  if (!key) return null;
+
+  // 取り違え防止。publishable key を入れても RLS は迂回できない
+  if (classifySupabaseKey(key) === "publishable") return null;
+
+  return key;
+}

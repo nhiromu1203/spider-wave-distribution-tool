@@ -31,10 +31,6 @@ export async function updateBuildingName(
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, message: "ログインが必要です。" };
 
   // 比較用の名前も更新する。以後は建物名でも重複判定が効くようになる。
   //
@@ -80,10 +76,6 @@ export async function markAsDistributed(
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, message: "ログインが必要です。" };
 
   const { error } = await supabase.from("distribution_history").insert(
     buildingIds.map((building_id) => ({
@@ -91,7 +83,7 @@ export async function markAsDistributed(
       distributed_date: input.distributedDate,
       distributed_by: input.distributedBy.trim() || null,
       notes: input.notes.trim() || null,
-      created_by: user.id,
+      created_by: null,
     })),
   );
 
@@ -106,7 +98,7 @@ export async function markAsDistributed(
       .from("duplicate_candidates")
       .update({
         status: "same",
-        resolved_by: user.id,
+        resolved_by: null,
         resolved_at: new Date().toISOString(),
       })
       .in("new_building_id", chunk)
@@ -131,10 +123,6 @@ export async function resolveDuplicate(
   decision: "same" | "different",
 ): Promise<ActionResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, message: "ログインが必要です。" };
 
   const { data: candidate, error: loadError } = await supabase
     .from("duplicate_candidates")
@@ -151,7 +139,7 @@ export async function resolveDuplicate(
     .from("duplicate_candidates")
     .update({
       status: decision,
-      resolved_by: user.id,
+      resolved_by: null,
       resolved_at: new Date().toISOString(),
     })
     .eq("id", candidateId);
@@ -176,7 +164,7 @@ export async function resolveDuplicate(
         source?.last_distributed_date ?? new Date().toISOString().slice(0, 10),
       distributed_by: null,
       notes: `重複候補確認で「同じ建物」と判断（${source?.building_name ?? "既存物件"}）`,
-      created_by: user.id,
+      created_by: null,
     });
 
     if (error) {

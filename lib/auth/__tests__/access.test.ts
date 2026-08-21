@@ -99,17 +99,32 @@ describe("ログイン経路の取り出し", () => {
   });
 });
 
+/**
+ * 現在このアプリはログインを求めていない。
+ * ここの判断ロジックは、ログインを戻す場合に使えるよう残してある。
+ * 使っていないあいだも壊れていないことを、この検証で確かめておく。
+ */
 describe("判断を掛ける場所", () => {
-  it("保護ページを開くたびにサーバー側で確かめている", async () => {
+  it("ログインを求めていないので、proxy では判断していない", async () => {
     const source = await readFile(
       new URL("../../../proxy.ts", import.meta.url),
       "utf8",
     );
     const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-    expect(code).toContain("decideAccess(user.email");
-    // 権限が無ければセッションを残さない
-    expect(code).toContain("supabase.auth.signOut()");
+    expect(code).not.toContain("decideAccess");
+    expect(code).not.toContain("auth.getUser");
+  });
+
+  it("DB へはサーバー側の鍵で触る（ブラウザへ鍵を出さない）", async () => {
+    const source = await readFile(
+      new URL("../../supabase/server.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("readServiceRoleKey");
+    // 秘密鍵に NEXT_PUBLIC_ を付けていないこと
+    expect(source).not.toContain("NEXT_PUBLIC_SUPABASE_SERVICE");
   });
 
   it("Google から戻った直後にも確かめている", async () => {
@@ -131,5 +146,43 @@ describe("判断を掛ける場所", () => {
 
     expect(source).toContain("signInWithPassword");
     expect(source).toContain("signInWithOAuth");
+  });
+});
+
+describe("鍵が未設定のときの案内", () => {
+  it("権限不足なら、何を設定すればよいか伝える", async () => {
+    const { describeQueryError } = await import("@/lib/buildings/queries");
+    const message = describeQueryError(
+      "建物一覧の取得",
+      "permission denied for table buildings",
+    );
+
+    expect(message).toContain("SUPABASE_SERVICE_ROLE_KEY");
+    expect(message).toContain("NEXT_PUBLIC_ は付けないでください");
+  });
+
+  it("それ以外の失敗はそのまま伝える", async () => {
+    const { describeQueryError } = await import("@/lib/buildings/queries");
+    expect(describeQueryError("建物一覧の取得", "timeout")).toBe(
+      "建物一覧の取得に失敗しました: timeout",
+    );
+  });
+});
+
+describe("秘密鍵の読み取り", () => {
+  it("公開鍵を入れても秘密鍵として扱わない", async () => {
+    const { readServiceRoleKey } = await import("@/lib/supabase/env");
+    const key = "SUPABASE_SERVICE_ROLE_KEY";
+    const before = process.env[key];
+
+    (process.env as Record<string, string | undefined>)[key] =
+      "sb_publishable_xxxxxxxxxxxx";
+    expect(readServiceRoleKey()).toBeNull();
+
+    (process.env as Record<string, string | undefined>)[key] = "sb_secret_xxxxxxxx";
+    expect(readServiceRoleKey()).toBe("sb_secret_xxxxxxxx");
+
+    if (before === undefined) delete (process.env as Record<string, string | undefined>)[key];
+    else (process.env as Record<string, string | undefined>)[key] = before;
   });
 });

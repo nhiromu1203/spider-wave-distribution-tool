@@ -44,12 +44,6 @@ export async function exportUnknownNameCsv(area: {
   city: string | null;
 }): Promise<ExportResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { ok: false, message: "ログインが必要です。", csv: null, fileName: null, count: 0 };
-  }
 
   let query = supabase
     .from("buildings")
@@ -122,10 +116,6 @@ export async function previewNameCsv(text: string): Promise<PreviewResult> {
   };
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ...empty, message: "ログインが必要です。" };
 
   const { rows, errors } = parseCompletionCsv(text);
   if (errors.length > 0 && rows.length === 0) {
@@ -187,10 +177,6 @@ export type ApplyResult = {
  */
 export async function applyNameCsv(text: string): Promise<ApplyResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, message: "ログインが必要です。", applied: 0, failed: 0 };
 
   const preview = await previewNameCsv(text);
   if (!preview.ok) {
@@ -229,7 +215,7 @@ export async function applyNameCsv(text: string): Promise<ApplyResult> {
       new_building_name: update.newName,
       source: update.source,
       status: update.status,
-      updated_by: user.id,
+      updated_by: null,
     });
   }
 

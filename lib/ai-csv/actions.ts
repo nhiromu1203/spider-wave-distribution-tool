@@ -76,12 +76,6 @@ export async function previewAiCsv(
   };
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { ok: false, message: "ログインが必要です。", plan: emptyPlan };
-  }
 
   const { rows, errors } = parseAiCsv(text);
   if (rows.length === 0) {
@@ -169,20 +163,6 @@ export async function applyAiCsv(
   options: ImportOptions = {},
 ): Promise<ApplyResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return {
-      ok: false,
-      message: "ログインが必要です。",
-      batchId: null,
-      applied: 0,
-      created: 0,
-      failed: 0,
-      errors: [],
-    };
-  }
 
   const preview = await previewAiCsv(text, options);
   if (!preview.ok) {
@@ -224,7 +204,7 @@ export async function applyAiCsv(
       file_name: fileName,
       source: targets[0]?.csv.source ?? null,
       row_count: preview.plan.counts.total,
-      created_by: user.id,
+      created_by: null,
     })
     .select("id")
     .single();
@@ -274,7 +254,7 @@ export async function applyAiCsv(
         new_value: c.newValue,
         source: row.csv.source || null,
         note: row.csv.note || null,
-        updated_by: user.id,
+        updated_by: null,
       })),
     );
   }
@@ -311,7 +291,7 @@ export async function applyAiCsv(
         new_value: c.newValue,
         source: row.csv.source || null,
         note: row.csv.note || null,
-        updated_by: user.id,
+        updated_by: null,
       })),
     );
   }
@@ -415,20 +395,6 @@ function buildPatch(row: PlannedRow): Record<string, unknown> {
  */
 export async function rollbackAiCsvBatch(batchId: string): Promise<ApplyResult> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return {
-      ok: false,
-      message: "ログインが必要です。",
-      batchId,
-      applied: 0,
-      created: 0,
-      failed: 0,
-      errors: [],
-    };
-  }
 
   const { data: history, error } = await supabase
     .from("building_field_updates")

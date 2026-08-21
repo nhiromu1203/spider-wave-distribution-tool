@@ -61,10 +61,6 @@ export async function completeBuildingNames(area: {
   };
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ...empty, notes: ["ログインが必要です。"] };
 
   const cityMaster = getCity(area.prefecture, area.city);
   if (!cityMaster?.slug) {

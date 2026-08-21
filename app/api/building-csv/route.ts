@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/supabase/server";
 import {
   CSV_MAX_ROWS_DEFAULT,
   CSV_SOURCE_ID,
@@ -23,22 +22,12 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET() {
-  const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
-  }
-
   const datasets = await listDatasets();
   await refreshCsvAreas();
   return NextResponse.json({ datasets });
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json({ error: "ログインが必要です。" }, { status: 401 });
-  }
-
   let formData: FormData;
   try {
     formData = await request.formData();

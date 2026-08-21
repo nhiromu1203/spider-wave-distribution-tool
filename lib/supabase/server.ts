@@ -2,18 +2,26 @@ import "server-only";
 
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
-import { requireSupabaseEnv } from "./env";
+import { readServiceRoleKey, requireSupabaseEnv } from "./env";
 
 /**
  * Server Component / Server Action / Route Handler 用のクライアント。
- * Cookie にセッションを保持するため、社内の複数人が同じブラウザ以外から
- * それぞれログインできる。
+ *
+ * ── 権限について ────────────────────────────────────────────
+ * ログインを不要にしたため、利用者は認証されていない。DB の権限は
+ * authenticated に与えてあるので、そのままでは何も読み書きできない。
+ *
+ * サーバー側でだけ使える鍵（service_role）があればそれを使う。
+ * この鍵はブラウザへ送られないため、DB を直接叩かれることはない。
+ * 鍵が未設定なら公開鍵のまま動く（ログインを使う運用に戻した場合）。
+ * ────────────────────────────────────────────────────────────
  */
 export async function createClient() {
   const { url, anonKey } = requireSupabaseEnv();
   const cookieStore = await cookies();
+  const key = readServiceRoleKey() ?? anonKey;
 
-  return createServerClient(url, anonKey, {
+  return createServerClient(url, key, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -30,13 +38,4 @@ export async function createClient() {
       },
     },
   });
-}
-
-/** ログイン中のユーザーを返す。未ログインなら null。 */
-export async function getCurrentUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user;
 }

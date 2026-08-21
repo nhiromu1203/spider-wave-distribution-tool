@@ -1,7 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/supabase/server";
-import { signOut } from "@/app/login/actions";
 
 const NAV = [
   { href: "/buildings", label: "建物一覧" },
@@ -9,14 +6,13 @@ const NAV = [
   { href: "/import", label: "過去配布リスト取込" },
 ];
 
-export default async function AppLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-
+/**
+ * 業務画面の枠。
+ *
+ * ログインを求めないため、利用者の情報は表示しない
+ * （メールアドレスの表示とログアウトは外した）。
+ */
+export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen">
       <header className="border-b border-[var(--border)] bg-[var(--surface)]">
@@ -36,15 +32,6 @@ export default async function AppLayout({
               </Link>
             ))}
           </nav>
-
-          <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
-            <span className="hidden sm:inline">{user.email}</span>
-            <form action={signOut}>
-              <button type="submit" className="btn px-2 py-1 text-xs">
-                ログアウト
-              </button>
-            </form>
-          </div>
         </div>
       </header>
 
